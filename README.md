@@ -13,7 +13,39 @@ The Windows and macOS paths are intentionally explicit:
 - macOS system-wide VPN needs a signed NetworkExtension packet tunnel. A Swift
   skeleton is included under `macos/` and uses the same protocol contract.
 
-## Install
+## One-command Linux deployment
+
+For the simple VPS flow, clone the repo on the server and install a systemd
+service:
+
+```bash
+git clone <your-repo-url> pyvpn
+cd pyvpn
+sudo scripts/linux/install-server.sh --public-host <vps-public-ip-or-domain>
+```
+
+The server continues running after SSH disconnects. Use:
+
+```bash
+sudo systemctl status pyvpn-server
+sudo journalctl -u pyvpn-server -f
+```
+
+On a Linux client:
+
+```bash
+git clone <your-repo-url> pyvpn
+cd pyvpn
+sudo scripts/linux/install-client.sh \
+  --server-host <vps-public-ip-or-domain> \
+  --token '<token-from-server-installer>' \
+  --cert-fingerprint 'sha256:<fingerprint-from-server-installer>'
+sudo pyvpn-client-start
+```
+
+See `docs/deployment.md` for the full deployment flow.
+
+## Development install
 
 ```powershell
 python -m venv .venv
