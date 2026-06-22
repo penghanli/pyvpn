@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyvpn"
+version = "0.1.0"
+description = "A small layer-3 VPN prototype with a Python server/client and a shared encrypted tunnel protocol."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "cryptography>=42.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+linux = [
+  "uvloop>=0.19.0; platform_system == 'Linux'",
+]
+
+[project.scripts]
+pyvpn-server = "pyvpn.server:main"
+pyvpn-client = "pyvpn.client:main"
+pyvpn-cert = "pyvpn.cert:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
