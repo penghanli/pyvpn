@@ -235,7 +235,11 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now pyvpn-server
+if systemctl is-active --quiet pyvpn-server.service; then
+  systemctl restart pyvpn-server.service
+else
+  systemctl enable --now pyvpn-server.service
+fi
 
 cat > /usr/local/bin/pyvpn-server-restart <<'EOF'
 #!/usr/bin/env bash
