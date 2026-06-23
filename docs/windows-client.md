@@ -42,6 +42,7 @@ Status and logs:
 ```powershell
 powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-status.ps1"
 Get-Content "C:\ProgramData\pyvpn\client.log" -Tail 80
+Get-Content "C:\ProgramData\pyvpn\client.err.log" -Tail 80
 ```
 
 Foreground debug mode:

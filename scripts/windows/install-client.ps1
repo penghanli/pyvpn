@@ -106,6 +106,7 @@ if (-not (Test-Path $wintunDllTarget)) {
 $envPath = Join-Path $ConfigDir "client.env.ps1"
 $pidPath = Join-Path $ConfigDir "client.pid"
 $logPath = Join-Path $ConfigDir "client.log"
+$errLogPath = Join-Path $ConfigDir "client.err.log"
 $bypassLiteral = "@(" + (($BypassIp | ForEach-Object { Quote-PowerShellString $_ }) -join ",") + ")"
 $noDnsLiteral = if ($NoDns) { '$true' } else { '$false' }
 
@@ -144,6 +145,7 @@ $upScript = Join-Path $InstallDir "pyvpn-client-up.ps1"
 `$ErrorActionPreference = "Stop"
 `$pidPath = $(Quote-PowerShellString $pidPath)
 `$logPath = $(Quote-PowerShellString $logPath)
+`$errLogPath = $(Quote-PowerShellString $errLogPath)
 `$startScript = $(Quote-PowerShellString $startScript)
 
 if (Test-Path `$pidPath) {
@@ -156,22 +158,27 @@ if (Test-Path `$pidPath) {
   Remove-Item -Force `$pidPath
 }
 
-`$process = Start-Process -FilePath "powershell.exe" `
-  -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", `$startScript) `
-  -WindowStyle Hidden `
-  -RedirectStandardOutput `$logPath `
-  -RedirectStandardError `$logPath `
-  -PassThru
+`$startOptions = @{
+  FilePath = "powershell.exe"
+  ArgumentList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", `$startScript)
+  WindowStyle = "Hidden"
+  RedirectStandardOutput = `$logPath
+  RedirectStandardError = `$errLogPath
+  PassThru = `$true
+}
+`$process = Start-Process @startOptions
 
 Set-Content -Encoding ASCII -Path `$pidPath -Value ([string]`$process.Id)
 Start-Sleep -Seconds 2
 `$started = Get-Process -Id `$process.Id -ErrorAction SilentlyContinue
 if (-not `$started) {
   if (Test-Path `$logPath) { Get-Content `$logPath -Tail 80 }
+  if (Test-Path `$errLogPath) { Get-Content `$errLogPath -Tail 80 }
   throw "pyvpn client failed to start"
 }
 Write-Host "pyvpn client started in the background with PID `$(`$process.Id)"
 Write-Host "Log: `$logPath"
+Write-Host "Error log: `$errLogPath"
 "@ | Set-Content -Encoding UTF8 -Path $upScript
 
 $downScript = Join-Path $InstallDir "pyvpn-client-down.ps1"
@@ -179,6 +186,7 @@ $downScript = Join-Path $InstallDir "pyvpn-client-down.ps1"
 `$ErrorActionPreference = "Continue"
 `$pidPath = $(Quote-PowerShellString $pidPath)
 `$logPath = $(Quote-PowerShellString $logPath)
+`$errLogPath = $(Quote-PowerShellString $errLogPath)
 `$envPath = $(Quote-PowerShellString $envPath)
 if (Test-Path `$envPath) { . `$envPath }
 if (-not (Test-Path `$pidPath)) {
@@ -204,12 +212,10 @@ if (`$PyVpnTun) {
   `$tun = Get-NetAdapter -Name `$PyVpnTun -ErrorAction SilentlyContinue
   if (`$tun) {
     foreach (`$prefix in @('0.0.0.0/1', '128.0.0.0/1')) {
-      Get-NetRoute -AddressFamily IPv4 -DestinationPrefix `$prefix -InterfaceIndex `$tun.ifIndex `
-        -ErrorAction SilentlyContinue |
-        Remove-NetRoute -Confirm:`$false -ErrorAction SilentlyContinue
+      `$routes = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix `$prefix -InterfaceIndex `$tun.ifIndex -ErrorAction SilentlyContinue
+      `$routes | Remove-NetRoute -Confirm:`$false -ErrorAction SilentlyContinue
     }
-    Set-DnsClientServerAddress -InterfaceAlias `$PyVpnTun -ResetServerAddresses `
-      -ErrorAction SilentlyContinue
+    Set-DnsClientServerAddress -InterfaceAlias `$PyVpnTun -ResetServerAddresses -ErrorAction SilentlyContinue
   }
 }
 
@@ -227,12 +233,14 @@ if (`$PyVpnServerHost) {
   }
 }
 Write-Host "Log: `$logPath"
+Write-Host "Error log: `$errLogPath"
 "@ | Set-Content -Encoding UTF8 -Path $downScript
 
 $statusScript = Join-Path $InstallDir "pyvpn-client-status.ps1"
 @"
 `$pidPath = $(Quote-PowerShellString $pidPath)
 `$logPath = $(Quote-PowerShellString $logPath)
+`$errLogPath = $(Quote-PowerShellString $errLogPath)
 if (Test-Path `$pidPath) {
   `$pidValue = [int](Get-Content -Raw `$pidPath)
   `$process = Get-Process -Id `$pidValue -ErrorAction SilentlyContinue
@@ -247,6 +255,10 @@ if (Test-Path `$pidPath) {
 Write-Host "Log: `$logPath"
 if (Test-Path `$logPath) {
   Get-Content `$logPath -Tail 40
+}
+Write-Host "Error log: `$errLogPath"
+if (Test-Path `$errLogPath) {
+  Get-Content `$errLogPath -Tail 40
 }
 "@ | Set-Content -Encoding UTF8 -Path $statusScript
 
