@@ -123,7 +123,15 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 if [[ ! -e /dev/net/tun ]]; then
+  if command -v modprobe >/dev/null 2>&1; then
+    modprobe tun || true
+  fi
+fi
+
+if [[ ! -e /dev/net/tun ]]; then
   echo "/dev/net/tun is missing. Enable the Linux TUN driver on this server." >&2
+  echo "On a VM/VPS, try: sudo modprobe tun" >&2
+  echo "In a container, start it with /dev/net/tun and NET_ADMIN access." >&2
   exit 1
 fi
 
