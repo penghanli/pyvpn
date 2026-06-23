@@ -177,8 +177,19 @@ Set-Content -Encoding ASCII -Path `$pidPath -Value ([string]`$process.Id)
 Start-Sleep -Seconds 2
 `$started = Get-Process -Id `$process.Id -ErrorAction SilentlyContinue
 if (-not `$started) {
-  if (Test-Path `$logPath) { Get-Content `$logPath -Tail 80 }
-  if (Test-Path `$errLogPath) { Get-Content `$errLogPath -Tail 80 }
+  `$errorText = ""
+  if (Test-Path `$errLogPath) {
+    `$errorText = Get-Content `$errLogPath -Raw
+  }
+  if (`$errorText -match "authentication failed") {
+    Write-Host "pyvpn client authentication failed."
+    Write-Host "The server token is different from this Windows client token."
+    Write-Host "On the server, run: sudo grep '^PYVPN_TOKEN=' /etc/pyvpn/server.env"
+    Write-Host "Then rerun scripts\\windows\\install-client.ps1 with that token."
+  } else {
+    if (Test-Path `$logPath) { Get-Content `$logPath -Tail 80 }
+    if (Test-Path `$errLogPath) { Get-Content `$errLogPath -Tail 80 }
+  }
   throw "pyvpn client failed to start"
 }
 Write-Host "pyvpn client started in the background with PID `$(`$process.Id)"
