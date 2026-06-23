@@ -134,6 +134,8 @@ class VpnServer:
                     if task is not stop_task:
                         task.result()
         finally:
+            control_server.close()
+            await control_server.wait_closed()
             stop_task.cancel()
             tun_task.cancel()
             timeout_task.cancel()
@@ -205,8 +207,7 @@ class VpnServer:
         finally:
             if session is not None and self.active_session is session:
                 self.active_session = None
-            writer.close()
-            await writer.wait_closed()
+            await self._close_writer(writer)
 
     async def _control_loop(self, reader, writer, session: ActiveSession) -> None:
         while self.active_session is session:
@@ -294,12 +295,24 @@ class VpnServer:
         self.udp_transport.sendto(data, session.client_addr)
 
     async def cleanup(self) -> None:
+        session = self.active_session
+        self.active_session = None
+        if session is not None and session.control_writer is not None:
+            await self._close_writer(session.control_writer)
         if self.udp_transport is not None:
             self.udp_transport.close()
+            await asyncio.sleep(0)
         if self.nat is not None:
             self.nat.cleanup()
         if self.tun is not None:
             self.tun.close()
+
+    async def _close_writer(self, writer) -> None:
+        try:
+            writer.close()
+            await asyncio.wait_for(writer.wait_closed(), timeout=2)
+        except Exception as exc:  # noqa: BLE001
+            print(f"ignored control close error: {exc}")
 
 
 def _token_from_arg(value: str | None) -> str:

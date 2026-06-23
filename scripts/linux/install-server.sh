@@ -204,6 +204,7 @@ EnvironmentFile=$CONFIG_DIR/server.env
 ExecStart=$INSTALL_DIR/venv/bin/pyvpn-server --listen-host \${PYVPN_LISTEN_HOST} --control-port \${PYVPN_CONTROL_PORT} --udp-port \${PYVPN_UDP_PORT} --public-host \${PYVPN_PUBLIC_HOST} --cert \${PYVPN_CERT} --key \${PYVPN_KEY} --tun \${PYVPN_TUN} --subnet \${PYVPN_SUBNET} --server-vip \${PYVPN_SERVER_VIP} --client-vip \${PYVPN_CLIENT_VIP} --dns \${PYVPN_DNS} --mtu \${PYVPN_MTU} --session-timeout \${PYVPN_SESSION_TIMEOUT}
 Restart=on-failure
 RestartSec=3
+TimeoutStopSec=10
 
 [Install]
 WantedBy=multi-user.target
