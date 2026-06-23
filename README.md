@@ -43,6 +43,10 @@ sudo scripts/linux/install-client.sh \
 sudo pyvpn-client-start
 ```
 
+When installing over SSH, the client installer preserves the current SSH source
+IP outside the VPN so the management connection can still return through the
+normal gateway.
+
 See `docs/deployment.md` for the full deployment flow.
 
 ## Development install

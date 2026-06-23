@@ -54,6 +54,10 @@ sudo pyvpn-client-start
 Disconnect with `Ctrl-C`. The client restores routes and DNS in its shutdown
 handler.
 
+When testing on a remote VPS over SSH, the client installer records the current
+SSH source IP and keeps that IP outside the VPN. You can add more protected
+management IPs with repeated `--bypass-ip <ip>` arguments.
+
 ## Windows and macOS clients
 
 The protocol code is shared, but system-wide VPN support still needs platform

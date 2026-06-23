@@ -34,6 +34,7 @@ class ClientConfig:
     tun_name: str
     mtu: int
     manage_dns: bool
+    bypass_ips: list[str]
 
 
 @dataclass
@@ -95,7 +96,7 @@ class VpnClient:
 
             self.network = LinuxClientNetwork(
                 tun_name=self.tun.name,
-                server_ips=[server_ip, self.session.udp_host],
+                server_ips=[server_ip, self.session.udp_host, *self.config.bypass_ips],
                 gateway=self.session.server_vip,
                 dns=self.session.dns,
                 manage_dns=self.config.manage_dns,
@@ -273,6 +274,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tun", default="pyvpn0", dest="tun_name")
     parser.add_argument("--mtu", type=int, default=DEFAULT_MTU)
     parser.add_argument("--no-dns", action="store_true")
+    parser.add_argument(
+        "--bypass-ip",
+        action="append",
+        default=[],
+        help="IPv4 address or hostname that must stay outside the VPN, repeatable. "
+        "Use this for SSH client IPs when testing over SSH.",
+    )
     return parser
 
 
@@ -287,6 +295,7 @@ async def async_main(argv: list[str] | None = None) -> None:
         tun_name=args.tun_name,
         mtu=args.mtu,
         manage_dns=not args.no_dns,
+        bypass_ips=[resolve_ipv4(value) for value in args.bypass_ip],
     )
     await VpnClient(config).run()
 

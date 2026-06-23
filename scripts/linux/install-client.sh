@@ -14,6 +14,7 @@ Options:
   --token TOKEN             Shared token printed by install-server.sh. Required.
   --cert-fingerprint FP     Server certificate fingerprint. Required.
   --control-port PORT       TLS control port. Default: 8443.
+  --bypass-ip IP            Extra IP to keep outside the VPN. Repeatable.
   --install-dir DIR         Virtualenv install directory. Default: /opt/pyvpn-client.
   --config-dir DIR          Runtime config directory. Default: /etc/pyvpn.
   --no-dns                  Do not change client DNS while connected.
@@ -30,6 +31,7 @@ CONTROL_PORT="8443"
 INSTALL_DIR="/opt/pyvpn-client"
 CONFIG_DIR="/etc/pyvpn"
 NO_DNS="0"
+BYPASS_IPS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -47,6 +49,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --control-port)
       CONTROL_PORT="${2:-}"
+      shift 2
+      ;;
+    --bypass-ip)
+      BYPASS_IPS+=("${2:-}")
       shift 2
       ;;
     --install-dir)
@@ -105,6 +111,16 @@ validate_env_value "control port" "$CONTROL_PORT"
 validate_env_value "install dir" "$INSTALL_DIR"
 validate_env_value "config dir" "$CONFIG_DIR"
 
+if [[ -n "${SSH_CLIENT:-}" ]]; then
+  BYPASS_IPS+=("${SSH_CLIENT%% *}")
+fi
+
+for bypass_ip in "${BYPASS_IPS[@]}"; do
+  validate_env_value "bypass IP" "$bypass_ip"
+done
+
+BYPASS_IPS_CSV="$(IFS=,; echo "${BYPASS_IPS[*]}")"
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 
@@ -147,6 +163,7 @@ PYVPN_CERT_FINGERPRINT=$CERT_FINGERPRINT
 PYVPN_TUN=pyvpn0
 PYVPN_MTU=1280
 PYVPN_NO_DNS=$NO_DNS
+PYVPN_BYPASS_IPS=$BYPASS_IPS_CSV
 EOF
 chmod 600 "$CONFIG_DIR/client.env"
 
@@ -161,6 +178,25 @@ ARGS=(
   --tun "\$PYVPN_TUN"
   --mtu "\$PYVPN_MTU"
 )
+
+add_bypass_ip() {
+  local ip="\$1"
+  if [[ -n "\$ip" ]]; then
+    ARGS+=(--bypass-ip "\$ip")
+  fi
+}
+
+if [[ -n "\${PYVPN_BYPASS_IPS:-}" ]]; then
+  IFS=',' read -ra SAVED_BYPASS_IPS <<< "\$PYVPN_BYPASS_IPS"
+  for ip in "\${SAVED_BYPASS_IPS[@]}"; do
+    add_bypass_ip "\$ip"
+  done
+fi
+
+if [[ -n "\${SSH_CLIENT:-}" ]]; then
+  add_bypass_ip "\${SSH_CLIENT%% *}"
+fi
+
 if [[ "\${PYVPN_NO_DNS:-0}" == "1" ]]; then
   ARGS+=(--no-dns)
 fi
