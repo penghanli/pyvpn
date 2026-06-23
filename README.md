@@ -27,8 +27,9 @@ sudo scripts/linux/install-server.sh --public-host <vps-public-ip-or-domain>
 The server continues running after SSH disconnects. Use:
 
 ```bash
-sudo systemctl status pyvpn-server
-sudo journalctl -u pyvpn-server -f
+sudo pyvpn-server-status
+sudo pyvpn-server-logs
+sudo pyvpn-server-restart
 ```
 
 On a Linux client:

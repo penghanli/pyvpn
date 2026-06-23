@@ -17,8 +17,9 @@ Options:
   --force-cert             Regenerate server certificate even when one exists.
 
 After installation:
-  systemctl status pyvpn-server
-  journalctl -u pyvpn-server -f
+  pyvpn-server-status
+  pyvpn-server-restart
+  pyvpn-server-logs
 EOF
 }
 
@@ -213,6 +214,36 @@ EOF
 systemctl daemon-reload
 systemctl enable --now pyvpn-server
 
+cat > /usr/local/bin/pyvpn-server-restart <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+systemctl restart pyvpn-server.service
+state="$(systemctl is-active pyvpn-server.service || true)"
+if [[ "$state" == "active" ]]; then
+  echo "pyvpn server restarted successfully."
+  systemctl --no-pager --full status pyvpn-server.service
+else
+  echo "pyvpn server restart finished, but service state is: $state" >&2
+  systemctl --no-pager --full status pyvpn-server.service || true
+  exit 1
+fi
+EOF
+chmod 755 /usr/local/bin/pyvpn-server-restart
+
+cat > /usr/local/bin/pyvpn-server-status <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+systemctl --no-pager --full status pyvpn-server.service
+EOF
+chmod 755 /usr/local/bin/pyvpn-server-status
+
+cat > /usr/local/bin/pyvpn-server-logs <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+journalctl -u pyvpn-server.service -f
+EOF
+chmod 755 /usr/local/bin/pyvpn-server-logs
+
 FINGERPRINT="$(sed -n 's/^certificate fingerprint: //p' "$FINGERPRINT_PATH")"
 
 cat <<EOF
@@ -220,9 +251,9 @@ cat <<EOF
 pyvpn server installed and started.
 
 Server commands:
-  sudo systemctl status pyvpn-server
-  sudo journalctl -u pyvpn-server -f
-  sudo systemctl restart pyvpn-server
+  sudo pyvpn-server-status
+  sudo pyvpn-server-logs
+  sudo pyvpn-server-restart
 
 Open these firewall ports on the VPS:
   TCP $CONTROL_PORT

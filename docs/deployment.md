@@ -24,11 +24,14 @@ The server keeps running after SSH disconnects because it is managed by systemd.
 Useful commands:
 
 ```bash
-sudo systemctl status pyvpn-server
-sudo journalctl -u pyvpn-server -f
-sudo systemctl restart pyvpn-server
+sudo pyvpn-server-status
+sudo pyvpn-server-logs
+sudo pyvpn-server-restart
 sudo systemctl stop pyvpn-server
 ```
+
+`pyvpn-server-restart` prints a success message and the current systemd status
+after the restart completes.
 
 Open the VPS firewall for TCP `8443` and UDP `8444`.
 
