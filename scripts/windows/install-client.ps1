@@ -107,6 +107,7 @@ $envPath = Join-Path $ConfigDir "client.env.ps1"
 $pidPath = Join-Path $ConfigDir "client.pid"
 $logPath = Join-Path $ConfigDir "client.log"
 $errLogPath = Join-Path $ConfigDir "client.err.log"
+$stopPath = Join-Path $ConfigDir "client.stop"
 $bypassLiteral = "@(" + (($BypassIp | ForEach-Object { Quote-PowerShellString $_ }) -join ",") + ")"
 $noDnsLiteral = if ($NoDns) { '$true' } else { '$false' }
 
@@ -131,7 +132,8 @@ $startScript = Join-Path $InstallDir "pyvpn-client-start.ps1"
   "--control-port", [string]`$PyVpnControlPort,
   "--cert-fingerprint", `$PyVpnCertFingerprint,
   "--tun", `$PyVpnTun,
-  "--mtu", [string]`$PyVpnMtu
+  "--mtu", [string]`$PyVpnMtu,
+  "--stop-file", $(Quote-PowerShellString $stopPath)
 )
 foreach (`$ip in `$PyVpnBypassIps) {
   if (`$ip) { `$argsList += @("--bypass-ip", `$ip) }
@@ -146,8 +148,10 @@ $upScript = Join-Path $InstallDir "pyvpn-client-up.ps1"
 `$pidPath = $(Quote-PowerShellString $pidPath)
 `$logPath = $(Quote-PowerShellString $logPath)
 `$errLogPath = $(Quote-PowerShellString $errLogPath)
+`$stopPath = $(Quote-PowerShellString $stopPath)
 `$startScript = $(Quote-PowerShellString $startScript)
 `$quotedStartScript = '"' + `$startScript + '"'
+Remove-Item -Force `$stopPath -ErrorAction SilentlyContinue
 
 if (Test-Path `$pidPath) {
   `$oldPid = [int](Get-Content -Raw `$pidPath)
@@ -188,6 +192,7 @@ $downScript = Join-Path $InstallDir "pyvpn-client-down.ps1"
 `$pidPath = $(Quote-PowerShellString $pidPath)
 `$logPath = $(Quote-PowerShellString $logPath)
 `$errLogPath = $(Quote-PowerShellString $errLogPath)
+`$stopPath = $(Quote-PowerShellString $stopPath)
 `$envPath = $(Quote-PowerShellString $envPath)
 if (Test-Path `$envPath) { . `$envPath }
 if (-not (Test-Path `$pidPath)) {
@@ -196,8 +201,8 @@ if (-not (Test-Path `$pidPath)) {
   `$pidValue = [int](Get-Content -Raw `$pidPath)
   `$process = Get-Process -Id `$pidValue -ErrorAction SilentlyContinue
   if (`$process) {
-    Stop-Process -Id `$pidValue -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 3
+    Set-Content -Encoding ASCII -Path `$stopPath -Value "stop"
+    Start-Sleep -Seconds 5
     `$process = Get-Process -Id `$pidValue -ErrorAction SilentlyContinue
     if (`$process) {
       Stop-Process -Id `$pidValue -Force -ErrorAction SilentlyContinue
@@ -207,6 +212,7 @@ if (-not (Test-Path `$pidPath)) {
     Write-Host "pyvpn client process was not found"
   }
   Remove-Item -Force `$pidPath -ErrorAction SilentlyContinue
+  Remove-Item -Force `$stopPath -ErrorAction SilentlyContinue
 }
 
 if (`$PyVpnTun) {

@@ -37,6 +37,10 @@ Disconnect:
 powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-down.ps1"
 ```
 
+The down script requests graceful shutdown first so the client can notify the
+server and restore routes. If the process does not exit after a few seconds, it
+falls back to force stop and route cleanup.
+
 Status and logs:
 
 ```powershell

@@ -11,6 +11,7 @@ import socket
 import ssl
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .auth import certificate_fingerprint, normalize_fingerprint
 from .constants import CONTROL_VERSION, DEFAULT_MTU, PACKET_TYPE_DATA, PACKET_TYPE_KEEPALIVE
@@ -37,6 +38,7 @@ class ClientConfig:
     mtu: int
     manage_dns: bool
     bypass_ips: list[str]
+    stop_file: str | None
 
 
 @dataclass
@@ -124,6 +126,7 @@ class VpnClient:
                 asyncio.create_task(self.tun_to_udp_loop()),
                 asyncio.create_task(self.control_heartbeat_loop(reader, writer)),
                 asyncio.create_task(self.udp_keepalive_loop()),
+                asyncio.create_task(self.stop_file_loop()),
                 asyncio.create_task(self._stop.wait()),
             ]
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -258,6 +261,21 @@ class VpnClient:
             await asyncio.sleep(10)
             self._send_udp(PACKET_TYPE_KEEPALIVE, b"")
 
+    async def stop_file_loop(self) -> None:
+        if not self.config.stop_file:
+            await asyncio.Future()
+            return
+        stop_path = Path(self.config.stop_file)
+        while True:
+            if stop_path.exists():
+                try:
+                    stop_path.unlink()
+                except OSError:
+                    pass
+                self._stop.set()
+                return
+            await asyncio.sleep(1)
+
     def _send_udp(self, packet_type: int, plaintext: bytes) -> None:
         if self.udp_transport is None or self.server_udp_addr is None or self.session is None:
             return
@@ -303,6 +321,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="IPv4 address or hostname that must stay outside the VPN, repeatable. "
         "Use this for SSH client IPs when testing over SSH.",
     )
+    parser.add_argument(
+        "--stop-file",
+        help="Path to a file that requests graceful shutdown when it appears.",
+    )
     return parser
 
 
@@ -318,6 +340,7 @@ async def async_main(argv: list[str] | None = None) -> None:
         mtu=args.mtu,
         manage_dns=not args.no_dns,
         bypass_ips=[resolve_ipv4(value) for value in args.bypass_ip],
+        stop_file=args.stop_file,
     )
     await VpnClient(config).run()
 
