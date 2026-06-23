@@ -32,7 +32,7 @@ sudo systemctl stop pyvpn-server
 
 Open the VPS firewall for TCP `8443` and UDP `8444`.
 
-## Linux client: install once, run from CLI
+## Linux client: install once, run in the background
 
 On the Linux client machine:
 
@@ -45,14 +45,27 @@ sudo scripts/linux/install-client.sh \
   --cert-fingerprint 'sha256:<fingerprint-from-server-installer>'
 ```
 
-Connect:
+Connect in the background:
 
 ```bash
-sudo pyvpn-client-start
+sudo pyvpn-client-up
 ```
 
-Disconnect with `Ctrl-C`. The client restores routes and DNS in its shutdown
-handler.
+Disconnect:
+
+```bash
+sudo pyvpn-client-down
+```
+
+Check status and logs:
+
+```bash
+sudo pyvpn-client-status
+sudo journalctl -u pyvpn-client -f
+```
+
+For foreground debugging, use `sudo pyvpn-client-start` and disconnect with
+`Ctrl-C`.
 
 When testing on a remote VPS over SSH, the client installer records the current
 SSH source IP and keeps that IP outside the VPN. You can add more protected
@@ -60,8 +73,8 @@ management IPs with repeated `--bypass-ip <ip>` arguments.
 The client also adds a temporary policy route for the VPS public source IP, so
 new inbound SSH connections can still return through the original gateway.
 
-For remote tests, run the client with a timeout first so a bad route cannot keep
-the VPS unreachable:
+For remote foreground tests, run the client with a timeout first so a bad route
+cannot keep the VPS unreachable:
 
 ```bash
 sudo timeout 60 pyvpn-client-start

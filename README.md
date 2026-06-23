@@ -40,7 +40,7 @@ sudo scripts/linux/install-client.sh \
   --server-host <vps-public-ip-or-domain> \
   --token '<token-from-server-installer>' \
   --cert-fingerprint 'sha256:<fingerprint-from-server-installer>'
-sudo pyvpn-client-start
+sudo pyvpn-client-up
 ```
 
 When installing over SSH, the client installer preserves the current SSH source
@@ -50,8 +50,10 @@ The Linux client also installs a temporary policy route for the VPS public
 source IP, so inbound SSH replies keep using the original gateway while the
 machine's ordinary outbound traffic goes through the VPN.
 
-For the first remote test, prefer `sudo timeout 60 pyvpn-client-start` so routes
-are restored automatically after one minute.
+The Linux client installer creates a systemd service but does not enable it at
+boot by default. Use `sudo pyvpn-client-up` to connect in the background and
+`sudo pyvpn-client-down` to disconnect. For foreground debugging, use
+`sudo pyvpn-client-start`.
 
 See `docs/deployment.md` for the full deployment flow.
 

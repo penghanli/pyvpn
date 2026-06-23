@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import os
 import platform
+import signal
 import socket
 import ssl
 import uuid
@@ -75,12 +76,14 @@ class VpnClient:
         self.udp_transport: asyncio.DatagramTransport | None = None
         self.session: ClientSession | None = None
         self.server_udp_addr: tuple[str, int] | None = None
+        self._stop = asyncio.Event()
 
     async def run(self) -> None:
         if platform.system() != "Linux":
             create_tun(self.config.tun_name, self.config.mtu)
             return
         require_linux_root()
+        self._install_signal_handlers()
 
         server_ip = resolve_ipv4(self.config.server_host)
         reader, writer = await self._open_control()
@@ -115,12 +118,14 @@ class VpnClient:
                 asyncio.create_task(self.tun_to_udp_loop()),
                 asyncio.create_task(self.control_heartbeat_loop(reader, writer)),
                 asyncio.create_task(self.udp_keepalive_loop()),
+                asyncio.create_task(self._stop.wait()),
             ]
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()
             for task in done:
-                task.result()
+                if task.exception() is not None:
+                    task.result()
         finally:
             try:
                 await write_frame(writer, {"type": "disconnect"})
@@ -129,6 +134,17 @@ class VpnClient:
             writer.close()
             await writer.wait_closed()
             await self.cleanup()
+
+    def _install_signal_handlers(self) -> None:
+        loop = asyncio.get_running_loop()
+        for signame in ("SIGINT", "SIGTERM"):
+            sig = getattr(signal, signame, None)
+            if sig is None:
+                continue
+            try:
+                loop.add_signal_handler(sig, self._stop.set)
+            except NotImplementedError:
+                signal.signal(sig, lambda _signum, _frame: self._stop.set())
 
     async def _open_control(self):
         context = ssl.create_default_context()

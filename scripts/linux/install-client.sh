@@ -20,7 +20,9 @@ Options:
   --no-dns                  Do not change client DNS while connected.
 
 After installation:
-  sudo pyvpn-client-start
+  sudo pyvpn-client-up
+  sudo pyvpn-client-down
+  sudo pyvpn-client-status
 EOF
 }
 
@@ -215,14 +217,62 @@ exec env PYVPN_TOKEN="\$PYVPN_TOKEN" "$INSTALL_DIR/venv/bin/pyvpn-client" "\${AR
 EOF
 chmod 755 /usr/local/bin/pyvpn-client-start
 
+cat > /etc/systemd/system/pyvpn-client.service <<EOF
+[Unit]
+Description=pyvpn client
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/pyvpn-client-start
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > /usr/local/bin/pyvpn-client-up <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+systemctl start pyvpn-client.service
+systemctl --no-pager --full status pyvpn-client.service
+EOF
+chmod 755 /usr/local/bin/pyvpn-client-up
+
+cat > /usr/local/bin/pyvpn-client-down <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+systemctl stop pyvpn-client.service
+systemctl --no-pager --full status pyvpn-client.service || true
+EOF
+chmod 755 /usr/local/bin/pyvpn-client-down
+
+cat > /usr/local/bin/pyvpn-client-status <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+systemctl --no-pager --full status pyvpn-client.service
+EOF
+chmod 755 /usr/local/bin/pyvpn-client-status
+
+systemctl daemon-reload
+
 cat <<EOF
 
 pyvpn Linux client installed.
 
-Connect:
-  sudo pyvpn-client-start
+Connect in the background:
+  sudo pyvpn-client-up
 
 Disconnect:
-  Press Ctrl-C in the client terminal. The client restores routes and DNS on exit.
+  sudo pyvpn-client-down
+
+Status and logs:
+  sudo pyvpn-client-status
+  sudo journalctl -u pyvpn-client -f
+
+Foreground debug mode:
+  sudo pyvpn-client-start
 
 EOF
