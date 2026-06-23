@@ -20,16 +20,37 @@ copies the matching `wintun.dll` into the virtualenv, and creates:
 
 ```text
 C:\Program Files\pyvpn-client\pyvpn-client-start.ps1
+C:\Program Files\pyvpn-client\pyvpn-client-up.ps1
+C:\Program Files\pyvpn-client\pyvpn-client-down.ps1
+C:\Program Files\pyvpn-client\pyvpn-client-status.ps1
 ```
 
 ## Connect
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-up.ps1"
+```
+
+Disconnect:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-down.ps1"
+```
+
+Status and logs:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-status.ps1"
+Get-Content "C:\ProgramData\pyvpn\client.log" -Tail 80
+```
+
+Foreground debug mode:
+
+```powershell
 powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-start.ps1"
 ```
 
-Disconnect with `Ctrl-C`. The client removes the split default routes and resets
-the Wintun DNS settings during shutdown.
+In foreground mode, disconnect with `Ctrl-C`.
 
 ## Verify
 

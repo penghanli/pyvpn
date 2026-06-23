@@ -104,6 +104,8 @@ if (-not (Test-Path $wintunDllTarget)) {
 }
 
 $envPath = Join-Path $ConfigDir "client.env.ps1"
+$pidPath = Join-Path $ConfigDir "client.pid"
+$logPath = Join-Path $ConfigDir "client.log"
 $bypassLiteral = "@(" + (($BypassIp | ForEach-Object { Quote-PowerShellString $_ }) -join ",") + ")"
 $noDnsLiteral = if ($NoDns) { '$true' } else { '$false' }
 
@@ -137,12 +139,129 @@ if (`$PyVpnNoDns) { `$argsList += "--no-dns" }
 & $(Quote-PowerShellString (Join-Path $InstallDir "venv\Scripts\pyvpn-client.exe")) @argsList
 "@ | Set-Content -Encoding UTF8 -Path $startScript
 
+$upScript = Join-Path $InstallDir "pyvpn-client-up.ps1"
+@"
+`$ErrorActionPreference = "Stop"
+`$pidPath = $(Quote-PowerShellString $pidPath)
+`$logPath = $(Quote-PowerShellString $logPath)
+`$startScript = $(Quote-PowerShellString $startScript)
+
+if (Test-Path `$pidPath) {
+  `$oldPid = [int](Get-Content -Raw `$pidPath)
+  `$oldProcess = Get-Process -Id `$oldPid -ErrorAction SilentlyContinue
+  if (`$oldProcess) {
+    Write-Host "pyvpn client is already running with PID `$oldPid"
+    exit 0
+  }
+  Remove-Item -Force `$pidPath
+}
+
+`$process = Start-Process -FilePath "powershell.exe" `
+  -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", `$startScript) `
+  -WindowStyle Hidden `
+  -RedirectStandardOutput `$logPath `
+  -RedirectStandardError `$logPath `
+  -PassThru
+
+Set-Content -Encoding ASCII -Path `$pidPath -Value ([string]`$process.Id)
+Start-Sleep -Seconds 2
+`$started = Get-Process -Id `$process.Id -ErrorAction SilentlyContinue
+if (-not `$started) {
+  if (Test-Path `$logPath) { Get-Content `$logPath -Tail 80 }
+  throw "pyvpn client failed to start"
+}
+Write-Host "pyvpn client started in the background with PID `$(`$process.Id)"
+Write-Host "Log: `$logPath"
+"@ | Set-Content -Encoding UTF8 -Path $upScript
+
+$downScript = Join-Path $InstallDir "pyvpn-client-down.ps1"
+@"
+`$ErrorActionPreference = "Continue"
+`$pidPath = $(Quote-PowerShellString $pidPath)
+`$logPath = $(Quote-PowerShellString $logPath)
+`$envPath = $(Quote-PowerShellString $envPath)
+if (Test-Path `$envPath) { . `$envPath }
+if (-not (Test-Path `$pidPath)) {
+  Write-Host "pyvpn client is not running"
+} else {
+  `$pidValue = [int](Get-Content -Raw `$pidPath)
+  `$process = Get-Process -Id `$pidValue -ErrorAction SilentlyContinue
+  if (`$process) {
+    Stop-Process -Id `$pidValue -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+    `$process = Get-Process -Id `$pidValue -ErrorAction SilentlyContinue
+    if (`$process) {
+      Stop-Process -Id `$pidValue -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "pyvpn client stopped"
+  } else {
+    Write-Host "pyvpn client process was not found"
+  }
+  Remove-Item -Force `$pidPath -ErrorAction SilentlyContinue
+}
+
+if (`$PyVpnTun) {
+  `$tun = Get-NetAdapter -Name `$PyVpnTun -ErrorAction SilentlyContinue
+  if (`$tun) {
+    foreach (`$prefix in @('0.0.0.0/1', '128.0.0.0/1')) {
+      Get-NetRoute -AddressFamily IPv4 -DestinationPrefix `$prefix -InterfaceIndex `$tun.ifIndex `
+        -ErrorAction SilentlyContinue |
+        Remove-NetRoute -Confirm:`$false -ErrorAction SilentlyContinue
+    }
+    Set-DnsClientServerAddress -InterfaceAlias `$PyVpnTun -ResetServerAddresses `
+      -ErrorAction SilentlyContinue
+  }
+}
+
+if (`$PyVpnServerHost) {
+  try {
+    `$serverIps = @([System.Net.Dns]::GetHostAddresses(`$PyVpnServerHost) |
+      Where-Object { `$_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork } |
+      ForEach-Object { `$_.ToString() })
+  } catch {
+    `$serverIps = @()
+  }
+  foreach (`$ip in (`$serverIps + `$PyVpnBypassIps | Where-Object { `$_ } | Sort-Object -Unique)) {
+    Get-NetRoute -AddressFamily IPv4 -DestinationPrefix "`$ip/32" -ErrorAction SilentlyContinue |
+      Remove-NetRoute -Confirm:`$false -ErrorAction SilentlyContinue
+  }
+}
+Write-Host "Log: `$logPath"
+"@ | Set-Content -Encoding UTF8 -Path $downScript
+
+$statusScript = Join-Path $InstallDir "pyvpn-client-status.ps1"
+@"
+`$pidPath = $(Quote-PowerShellString $pidPath)
+`$logPath = $(Quote-PowerShellString $logPath)
+if (Test-Path `$pidPath) {
+  `$pidValue = [int](Get-Content -Raw `$pidPath)
+  `$process = Get-Process -Id `$pidValue -ErrorAction SilentlyContinue
+  if (`$process) {
+    Write-Host "pyvpn client is running with PID `$pidValue"
+  } else {
+    Write-Host "pyvpn client PID file exists, but the process is not running"
+  }
+} else {
+  Write-Host "pyvpn client is not running"
+}
+Write-Host "Log: `$logPath"
+if (Test-Path `$logPath) {
+  Get-Content `$logPath -Tail 40
+}
+"@ | Set-Content -Encoding UTF8 -Path $statusScript
+
 Write-Host ""
 Write-Host "pyvpn Windows client installed."
 Write-Host ""
-Write-Host "Connect from an elevated PowerShell window:"
-Write-Host "  powershell -ExecutionPolicy Bypass -File `"$startScript`""
+Write-Host "Connect in the background from an elevated PowerShell window:"
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$upScript`""
 Write-Host ""
 Write-Host "Disconnect:"
-Write-Host "  Press Ctrl-C in that PowerShell window."
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$downScript`""
+Write-Host ""
+Write-Host "Status:"
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$statusScript`""
+Write-Host ""
+Write-Host "Foreground debug mode:"
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$startScript`""
 Write-Host ""
