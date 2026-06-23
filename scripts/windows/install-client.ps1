@@ -147,6 +147,7 @@ $upScript = Join-Path $InstallDir "pyvpn-client-up.ps1"
 `$logPath = $(Quote-PowerShellString $logPath)
 `$errLogPath = $(Quote-PowerShellString $errLogPath)
 `$startScript = $(Quote-PowerShellString $startScript)
+`$quotedStartScript = '"' + `$startScript + '"'
 
 if (Test-Path `$pidPath) {
   `$oldPid = [int](Get-Content -Raw `$pidPath)
@@ -160,7 +161,7 @@ if (Test-Path `$pidPath) {
 
 `$startOptions = @{
   FilePath = "powershell.exe"
-  ArgumentList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", `$startScript)
+  ArgumentList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", `$quotedStartScript)
   WindowStyle = "Hidden"
   RedirectStandardOutput = `$logPath
   RedirectStandardError = `$errLogPath
