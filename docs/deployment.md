@@ -82,12 +82,11 @@ sudo timeout 60 pyvpn-client-start
 
 ## Windows and macOS clients
 
-The protocol code is shared, but system-wide VPN support still needs platform
-wrapping:
+The protocol code is shared, but platform packaging differs:
 
-- Windows: add a Wintun adapter binding, then package a Windows client wrapper.
+- Windows: use the Wintun-based client path in `docs/windows-client.md`.
 - macOS: build the `macos/` NetworkExtension target in Xcode and connect its
   packet flow to the shared pyvpn protocol.
 
-Until those wrappers are implemented, Linux is the only one-command runnable
-server/client path.
+Linux remains the most tested path. Windows is experimental and should be
+verified with IPv4-only tests first.

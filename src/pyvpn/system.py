@@ -18,6 +18,19 @@ def require_linux_root() -> None:
         raise PlatformError("this operation must run as root")
 
 
+def require_windows_admin() -> None:
+    if platform.system() != "Windows":
+        raise PlatformError("this operation is only implemented on Windows")
+    import ctypes
+
+    try:
+        is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception as exc:  # noqa: BLE001
+        raise PlatformError("could not determine Windows administrator status") from exc
+    if not is_admin:
+        raise PlatformError("this operation must run in an elevated PowerShell or terminal")
+
+
 def command_exists(name: str) -> bool:
     return shutil.which(name) is not None
 
@@ -35,4 +48,18 @@ def run(
         input=input_text,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+    )
+
+
+def run_powershell(script: str, *, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ],
+        check=check,
     )

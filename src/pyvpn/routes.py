@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .errors import PlatformError
 from .system import command_exists, run
+from .system import run_powershell
 
 
 def resolve_ipv4(host: str) -> str:
@@ -37,6 +38,10 @@ def _route_get(ip: str) -> RouteInfo:
     dev = parts[parts.index("dev") + 1] if "dev" in parts else None
     src = parts[parts.index("src") + 1] if "src" in parts else None
     return RouteInfo(via=via, dev=dev, src=src)
+
+
+def _ps_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
 @dataclass
@@ -182,3 +187,76 @@ class LinuxClientNetwork:
 
         for server_ip in self.bypassed_ips:
             run(["ip", "route", "del", f"{server_ip}/32"], check=False)
+
+
+@dataclass
+class WindowsClientNetwork:
+    tun_name: str
+    server_ips: list[str]
+    gateway: str
+    dns: str
+    manage_dns: bool = True
+
+    def setup(self) -> None:
+        unique_server_ips = list(dict.fromkeys(self.server_ips))
+        server_ips_ps = "@(" + ",".join(_ps_quote(ip) for ip in unique_server_ips) + ")"
+        dns_script = ""
+        if self.manage_dns:
+            dns_script = (
+                f"Set-DnsClientServerAddress -InterfaceAlias $tunName "
+                f"-ServerAddresses @({_ps_quote(self.dns)}) -ErrorAction Stop"
+            )
+
+        script = f"""
+$ErrorActionPreference = 'Stop'
+$tunName = {_ps_quote(self.tun_name)}
+$gateway = {_ps_quote(self.gateway)}
+$serverIps = {server_ips_ps}
+$tun = Get-NetAdapter -Name $tunName -ErrorAction Stop
+$default = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' |
+  Where-Object {{ $_.NextHop -ne '0.0.0.0' }} |
+  Sort-Object RouteMetric, InterfaceMetric |
+  Select-Object -First 1
+if (-not $default) {{ throw 'Could not find the current IPv4 default route' }}
+
+foreach ($ip in $serverIps) {{
+  Get-NetRoute -AddressFamily IPv4 -DestinationPrefix "$ip/32" -ErrorAction SilentlyContinue |
+    Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+  New-NetRoute -DestinationPrefix "$ip/32" -InterfaceIndex $default.InterfaceIndex `
+    -NextHop $default.NextHop -RouteMetric 1 -PolicyStore ActiveStore -ErrorAction Stop | Out-Null
+}}
+
+foreach ($prefix in @('0.0.0.0/1', '128.0.0.0/1')) {{
+  Get-NetRoute -AddressFamily IPv4 -DestinationPrefix $prefix -InterfaceIndex $tun.ifIndex `
+    -ErrorAction SilentlyContinue |
+    Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+  New-NetRoute -DestinationPrefix $prefix -InterfaceIndex $tun.ifIndex -NextHop $gateway `
+    -RouteMetric 1 -PolicyStore ActiveStore -ErrorAction Stop | Out-Null
+}}
+
+{dns_script}
+"""
+        run_powershell(script)
+
+    def cleanup(self) -> None:
+        unique_server_ips = list(dict.fromkeys(self.server_ips))
+        server_ips_ps = "@(" + ",".join(_ps_quote(ip) for ip in unique_server_ips) + ")"
+        script = f"""
+$tunName = {_ps_quote(self.tun_name)}
+$serverIps = {server_ips_ps}
+$tun = Get-NetAdapter -Name $tunName -ErrorAction SilentlyContinue
+if ($tun) {{
+  foreach ($prefix in @('0.0.0.0/1', '128.0.0.0/1')) {{
+    Get-NetRoute -AddressFamily IPv4 -DestinationPrefix $prefix -InterfaceIndex $tun.ifIndex `
+      -ErrorAction SilentlyContinue |
+      Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+  }}
+  Set-DnsClientServerAddress -InterfaceAlias $tunName -ResetServerAddresses `
+    -ErrorAction SilentlyContinue
+}}
+foreach ($ip in $serverIps) {{
+  Get-NetRoute -AddressFamily IPv4 -DestinationPrefix "$ip/32" -ErrorAction SilentlyContinue |
+    Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+}}
+"""
+        run_powershell(script, check=False)

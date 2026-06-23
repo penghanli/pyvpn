@@ -21,8 +21,9 @@ from .ip import inspect_ipv4
 from .packet import open_packet, parse_header, seal_packet
 from .replay import ReplayWindow
 from .routes import LinuxClientNetwork, resolve_ipv4
-from .system import require_linux_root
-from .tun import LinuxTunDevice, create_tun
+from .routes import WindowsClientNetwork
+from .system import require_linux_root, require_windows_admin
+from .tun import TunDevice, create_tun
 
 
 @dataclass
@@ -71,18 +72,22 @@ class ClientUdpProtocol(asyncio.DatagramProtocol):
 class VpnClient:
     def __init__(self, config: ClientConfig):
         self.config = config
-        self.tun: LinuxTunDevice | None = None
-        self.network: LinuxClientNetwork | None = None
+        self.tun: TunDevice | None = None
+        self.network: LinuxClientNetwork | WindowsClientNetwork | None = None
         self.udp_transport: asyncio.DatagramTransport | None = None
         self.session: ClientSession | None = None
         self.server_udp_addr: tuple[str, int] | None = None
         self._stop = asyncio.Event()
 
     async def run(self) -> None:
-        if platform.system() != "Linux":
+        current_platform = platform.system()
+        if current_platform == "Linux":
+            require_linux_root()
+        elif current_platform == "Windows":
+            require_windows_admin()
+        else:
             create_tun(self.config.tun_name, self.config.mtu)
             return
-        require_linux_root()
         self._install_signal_handlers()
 
         server_ip = resolve_ipv4(self.config.server_host)
@@ -94,10 +99,11 @@ class VpnClient:
                 raise AuthenticationError(str(accept.get("message", "server rejected client")))
             self.session = self._parse_accept(accept)
 
-            self.tun = LinuxTunDevice.create(self.config.tun_name, self.config.mtu)
+            self.tun = create_tun(self.config.tun_name, self.config.mtu)
             self.tun.configure_client(self.session.client_vip, self.session.server_vip)
 
-            self.network = LinuxClientNetwork(
+            network_cls = LinuxClientNetwork if current_platform == "Linux" else WindowsClientNetwork
+            self.network = network_cls(
                 tun_name=self.tun.name,
                 server_ips=[server_ip, self.session.udp_host, *self.config.bypass_ips],
                 gateway=self.session.server_vip,

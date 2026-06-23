@@ -8,8 +8,8 @@ DNS to the tunnel, and restores the machine on exit.
 
 The Windows and macOS paths are intentionally explicit:
 
-- Windows needs a Wintun binding before the Python client can create a system
-  TUN adapter.
+- Windows uses Wintun. See `docs/windows-client.md` for the elevated PowerShell
+  install and test flow.
 - macOS system-wide VPN needs a signed NetworkExtension packet tunnel. A Swift
   skeleton is included under `macos/` and uses the same protocol contract.
 
@@ -109,9 +109,11 @@ settings on shutdown.
 ## Important v1 limits
 
 - Single active client only.
-- IPv4 forwarding only. Block IPv6 separately on the client firewall if the host
-  has native IPv6 connectivity and leak prevention matters.
-- Windows and macOS are not fully runnable from Python alone yet because they
-  require Wintun and NetworkExtension integration.
+- IPv4 forwarding only. Block IPv6 separately on the client firewall if leak
+  prevention matters.
+- Windows client support is experimental and depends on Wintun. Use elevated
+  PowerShell and verify with `curl.exe -4 https://ifconfig.me`.
+- macOS is still a NetworkExtension skeleton and is not yet runnable as a full
+  system VPN client.
 - This is suitable for self-owned infrastructure testing, not a commercial VPN
   service.

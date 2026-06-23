@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import os
 import platform
 import struct
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 from .errors import PlatformError
-from .system import run
+from .system import run, run_powershell
 
 TUNSETIFF = 0x400454CA
 IFF_TUN = 0x0001
 IFF_NO_PI = 0x1000
+ERROR_NO_MORE_ITEMS = 259
+ERROR_HANDLE_EOF = 38
+ERROR_BUFFER_OVERFLOW = 111
+INFINITE = 0xFFFFFFFF
 
 
 class TunDevice:
@@ -28,6 +35,10 @@ class TunDevice:
 
     def close(self) -> None:
         raise NotImplementedError
+
+
+def _ps_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
 @dataclass
@@ -103,14 +114,154 @@ class LinuxTunDevice(TunDevice):
             pass
 
 
+class _WintunApi:
+    def __init__(self, dll_path: Path):
+        if platform.system() != "Windows":
+            raise PlatformError("Wintun is only available on Windows")
+        if not dll_path.exists():
+            raise PlatformError(
+                f"wintun.dll was not found at {dll_path}. Run scripts/windows/install-client.ps1 "
+                "or set PYVPN_WINTUN_DLL to the downloaded DLL path."
+            )
+
+        self.dll = ctypes.WinDLL(str(dll_path), use_last_error=True)
+        self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self._configure_functions()
+
+    def _configure_functions(self) -> None:
+        self.dll.WintunCreateAdapter.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_wchar_p,
+            ctypes.c_void_p,
+        ]
+        self.dll.WintunCreateAdapter.restype = ctypes.c_void_p
+        self.dll.WintunOpenAdapter.argtypes = [ctypes.c_wchar_p]
+        self.dll.WintunOpenAdapter.restype = ctypes.c_void_p
+        self.dll.WintunCloseAdapter.argtypes = [ctypes.c_void_p]
+        self.dll.WintunCloseAdapter.restype = None
+        self.dll.WintunStartSession.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        self.dll.WintunStartSession.restype = ctypes.c_void_p
+        self.dll.WintunEndSession.argtypes = [ctypes.c_void_p]
+        self.dll.WintunEndSession.restype = None
+        self.dll.WintunGetReadWaitEvent.argtypes = [ctypes.c_void_p]
+        self.dll.WintunGetReadWaitEvent.restype = ctypes.c_void_p
+        self.dll.WintunReceivePacket.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+        self.dll.WintunReceivePacket.restype = ctypes.c_void_p
+        self.dll.WintunReleaseReceivePacket.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        self.dll.WintunReleaseReceivePacket.restype = None
+        self.dll.WintunAllocateSendPacket.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        self.dll.WintunAllocateSendPacket.restype = ctypes.c_void_p
+        self.dll.WintunSendPacket.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        self.dll.WintunSendPacket.restype = None
+        self.kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        self.kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+
+
+def _find_wintun_dll() -> Path:
+    candidates: list[Path] = []
+    env_path = os.environ.get("PYVPN_WINTUN_DLL")
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.append(Path(sys.executable).with_name("wintun.dll"))
+    candidates.append(Path.cwd() / "wintun.dll")
+    candidates.append(Path(__file__).resolve().parent / "wintun.dll")
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+@dataclass
+class WindowsTunDevice(TunDevice):
+    name: str
+    api: _WintunApi
+    adapter: int
+    session: int
+    mtu: int
+
+    @classmethod
+    def create(cls, name: str, mtu: int) -> "WindowsTunDevice":
+        api = _WintunApi(_find_wintun_dll())
+        adapter = api.dll.WintunOpenAdapter(name)
+        if not adapter:
+            adapter = api.dll.WintunCreateAdapter(name, "PyVpn", None)
+        if not adapter:
+            raise PlatformError(f"WintunCreateAdapter failed: {ctypes.get_last_error()}")
+
+        session = api.dll.WintunStartSession(adapter, 0x400000)
+        if not session:
+            api.dll.WintunCloseAdapter(adapter)
+            raise PlatformError(f"WintunStartSession failed: {ctypes.get_last_error()}")
+        return cls(name=name, api=api, adapter=adapter, session=session, mtu=mtu)
+
+    def configure_client(self, address: str, peer: str) -> None:
+        script = f"""
+$ErrorActionPreference = 'Stop'
+$name = {_ps_quote(self.name)}
+$ip = {_ps_quote(address)}
+$mtu = {int(self.mtu)}
+for ($i = 0; $i -lt 30; $i++) {{
+  $adapter = Get-NetAdapter -Name $name -ErrorAction SilentlyContinue
+  if ($adapter) {{ break }}
+  Start-Sleep -Milliseconds 500
+}}
+if (-not $adapter) {{ throw "Wintun adapter '$name' did not appear" }}
+Get-NetIPAddress -InterfaceAlias $name -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+  Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+New-NetIPAddress -InterfaceAlias $name -IPAddress $ip -PrefixLength 24 -ErrorAction Stop | Out-Null
+Set-NetIPInterface -InterfaceAlias $name -AddressFamily IPv4 -InterfaceMetric 1 -ErrorAction Stop
+netsh interface ipv4 set subinterface $name mtu=$mtu store=active | Out-Null
+"""
+        run_powershell(script)
+
+    async def read(self) -> bytes:
+        return await asyncio.to_thread(self._read_sync)
+
+    def _read_sync(self) -> bytes:
+        packet_size = ctypes.c_uint32()
+        while True:
+            packet = self.api.dll.WintunReceivePacket(self.session, ctypes.byref(packet_size))
+            if packet:
+                try:
+                    return ctypes.string_at(packet, packet_size.value)
+                finally:
+                    self.api.dll.WintunReleaseReceivePacket(self.session, packet)
+            error = ctypes.get_last_error()
+            if error == ERROR_NO_MORE_ITEMS:
+                event = self.api.dll.WintunGetReadWaitEvent(self.session)
+                self.api.kernel32.WaitForSingleObject(event, INFINITE)
+                continue
+            if error == ERROR_HANDLE_EOF:
+                raise PlatformError("Wintun adapter is terminating")
+            raise PlatformError(f"WintunReceivePacket failed: {error}")
+
+    async def write(self, packet: bytes) -> None:
+        await asyncio.to_thread(self._write_sync, packet)
+
+    def _write_sync(self, packet: bytes) -> None:
+        allocated = self.api.dll.WintunAllocateSendPacket(self.session, len(packet))
+        if not allocated:
+            error = ctypes.get_last_error()
+            if error == ERROR_BUFFER_OVERFLOW:
+                return
+            raise PlatformError(f"WintunAllocateSendPacket failed: {error}")
+        ctypes.memmove(allocated, packet, len(packet))
+        self.api.dll.WintunSendPacket(self.session, allocated)
+
+    def close(self) -> None:
+        if self.session:
+            self.api.dll.WintunEndSession(self.session)
+            self.session = 0
+        if self.adapter:
+            self.api.dll.WintunCloseAdapter(self.adapter)
+            self.adapter = 0
+
+
 def create_tun(name: str, mtu: int) -> TunDevice:
     if platform.system() == "Linux":
         return LinuxTunDevice.create(name, mtu)
     if platform.system() == "Windows":
-        raise PlatformError(
-            "Windows client requires a Wintun adapter binding; this v1 package "
-            "includes the protocol/runtime but not the Wintun ctypes wrapper yet."
-        )
+        return WindowsTunDevice.create(name, mtu)
     if platform.system() == "Darwin":
         raise PlatformError(
             "macOS system VPN must run through NetworkExtension; see macos/."
