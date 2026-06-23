@@ -58,6 +58,13 @@ When testing on a remote VPS over SSH, the client installer records the current
 SSH source IP and keeps that IP outside the VPN. You can add more protected
 management IPs with repeated `--bypass-ip <ip>` arguments.
 
+For remote tests, run the client with a timeout first so a bad route cannot keep
+the VPS unreachable:
+
+```bash
+sudo timeout 60 pyvpn-client-start
+```
+
 ## Windows and macOS clients
 
 The protocol code is shared, but system-wide VPN support still needs platform

@@ -181,7 +181,7 @@ ARGS=(
 
 add_bypass_ip() {
   local ip="\$1"
-  if [[ -n "\$ip" ]]; then
+  if [[ -n "\$ip" && "\$ip" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then
     ARGS+=(--bypass-ip "\$ip")
   fi
 }
@@ -195,6 +195,17 @@ fi
 
 if [[ -n "\${SSH_CLIENT:-}" ]]; then
   add_bypass_ip "\${SSH_CLIENT%% *}"
+fi
+
+if command -v ss >/dev/null 2>&1; then
+  while read -r peer; do
+    add_bypass_ip "\$peer"
+  done < <(
+    ss -Htn state established 2>/dev/null \
+      | awk '\$4 ~ /:22$/ {print \$5}' \
+      | sed -E 's/^\\[?([0-9.]+)\\]?:[0-9]+$/\\1/' \
+      | sort -u
+  )
 fi
 
 if [[ "\${PYVPN_NO_DNS:-0}" == "1" ]]; then

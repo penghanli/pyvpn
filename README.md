@@ -47,6 +47,9 @@ When installing over SSH, the client installer preserves the current SSH source
 IP outside the VPN so the management connection can still return through the
 normal gateway.
 
+For the first remote test, prefer `sudo timeout 60 pyvpn-client-start` so routes
+are restored automatically after one minute.
+
 See `docs/deployment.md` for the full deployment flow.
 
 ## Development install
