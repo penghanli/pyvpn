@@ -57,6 +57,8 @@ handler.
 When testing on a remote VPS over SSH, the client installer records the current
 SSH source IP and keeps that IP outside the VPN. You can add more protected
 management IPs with repeated `--bypass-ip <ip>` arguments.
+The client also adds a temporary policy route for the VPS public source IP, so
+new inbound SSH connections can still return through the original gateway.
 
 For remote tests, run the client with a timeout first so a bad route cannot keep
 the VPS unreachable:

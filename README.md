@@ -46,6 +46,9 @@ sudo pyvpn-client-start
 When installing over SSH, the client installer preserves the current SSH source
 IP outside the VPN so the management connection can still return through the
 normal gateway.
+The Linux client also installs a temporary policy route for the VPS public
+source IP, so inbound SSH replies keep using the original gateway while the
+machine's ordinary outbound traffic goes through the VPN.
 
 For the first remote test, prefer `sudo timeout 60 pyvpn-client-start` so routes
 are restored automatically after one minute.
