@@ -20,6 +20,14 @@ The installer:
 - creates and starts `pyvpn-server.service`.
 
 The server keeps running after SSH disconnects because it is managed by systemd.
+The shared token allows 3 simultaneous clients by default. Set a different
+limit from 1 to 10 with `--max-clients`, for example:
+
+```bash
+sudo scripts/linux/install-server.sh \
+  --public-host <vps-public-ip-or-domain> \
+  --max-clients 5
+```
 
 Useful commands:
 

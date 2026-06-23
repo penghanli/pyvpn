@@ -33,6 +33,10 @@ from .replay import ReplayWindow
 from .system import require_linux_root
 from .tun import LinuxTunDevice
 
+DEFAULT_MAX_CLIENTS = 3
+MIN_MAX_CLIENTS = 1
+MAX_MAX_CLIENTS = 10
+
 
 @dataclass
 class ServerConfig:
@@ -51,6 +55,7 @@ class ServerConfig:
     mtu: int
     external_interface: str | None
     session_timeout: float
+    max_clients: int
 
 
 @dataclass
@@ -89,7 +94,14 @@ class VpnServer:
         self.tun: LinuxTunDevice | None = None
         self.nat: LinuxNatManager | None = None
         self.udp_transport: asyncio.DatagramTransport | None = None
-        self.active_session: ActiveSession | None = None
+        self.sessions_by_id: dict[int, ActiveSession] = {}
+        self.sessions_by_vip: dict[ipaddress.IPv4Address, ActiveSession] = {}
+        self.client_pool = build_client_pool(
+            config.subnet,
+            config.server_vip,
+            config.client_vip,
+            config.max_clients,
+        )
         self._stop = asyncio.Event()
 
     async def run(self) -> None:
@@ -165,22 +177,30 @@ class VpnServer:
                 await self._send_error(writer, "authentication failed")
                 return
 
-            if self.active_session is not None:
-                await self._send_error(writer, "a client is already active")
+            if len(self.sessions_by_id) >= self.config.max_clients:
+                await self._send_error(
+                    writer,
+                    f"server is full: {self.config.max_clients} clients are already active",
+                )
                 return
 
             client_id = str(hello.get("client_id") or "client")
+            client_vip = self._allocate_client_vip()
+            if client_vip is None:
+                await self._send_error(writer, "server is full: no client address is available")
+                return
+
             keys = new_session_keys()
             session = ActiveSession(
-                session_id=secrets.randbits(64),
+                session_id=self._new_session_id(),
                 client_id=client_id,
-                client_vip=ipaddress.IPv4Address(self.config.client_vip),
+                client_vip=client_vip,
                 keys=keys,
                 c2s_cipher=TunnelCipher(keys.c2s),
                 s2c_cipher=TunnelCipher(keys.s2c),
             )
             session.control_writer = writer
-            self.active_session = session
+            self._add_session(session)
 
             endpoint_host = self.config.public_host or self.config.listen_host
             await write_frame(
@@ -189,7 +209,7 @@ class VpnServer:
                     "type": "accept",
                     "version": CONTROL_VERSION,
                     "session_id": session.session_id,
-                    "client_vip": f"{self.config.client_vip}/32",
+                    "client_vip": f"{session.client_vip}/32",
                     "server_vip": self.config.server_vip,
                     "routes": ["0.0.0.0/0"],
                     "dns": [self.config.dns],
@@ -205,12 +225,12 @@ class VpnServer:
         except Exception as exc:  # noqa: BLE001
             print(f"control connection error from {peer}: {exc}")
         finally:
-            if session is not None and self.active_session is session:
-                self.active_session = None
+            if session is not None:
+                self._remove_session(session)
             await self._close_writer(writer)
 
     async def _control_loop(self, reader, writer, session: ActiveSession) -> None:
-        while self.active_session is session:
+        while self.sessions_by_id.get(session.session_id) is session:
             message = await read_frame(reader)
             msg_type = message.get("type")
             if msg_type == "heartbeat":
@@ -226,12 +246,34 @@ class VpnServer:
     async def _send_error(self, writer, message: str) -> None:
         await write_frame(writer, {"type": "error", "message": message})
 
+    def _allocate_client_vip(self) -> ipaddress.IPv4Address | None:
+        for address in self.client_pool:
+            if address not in self.sessions_by_vip:
+                return address
+        return None
+
+    def _new_session_id(self) -> int:
+        while True:
+            session_id = secrets.randbits(64)
+            if session_id not in self.sessions_by_id:
+                return session_id
+
+    def _add_session(self, session: ActiveSession) -> None:
+        self.sessions_by_id[session.session_id] = session
+        self.sessions_by_vip[session.client_vip] = session
+
+    def _remove_session(self, session: ActiveSession) -> None:
+        if self.sessions_by_id.get(session.session_id) is session:
+            self.sessions_by_id.pop(session.session_id, None)
+        if self.sessions_by_vip.get(session.client_vip) is session:
+            self.sessions_by_vip.pop(session.client_vip, None)
+
     async def handle_udp_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
-        session = self.active_session
-        if session is None:
-            return
         try:
             header = parse_header(data)
+            session = self.sessions_by_id.get(header.session_id)
+            if session is None:
+                return
             if header.session_id != session.session_id:
                 return
             header, plaintext = open_packet(data, session.c2s_cipher)
@@ -257,30 +299,26 @@ class VpnServer:
             return
         while True:
             packet = await self.tun.read()
-            session = self.active_session
-            if session is None or session.client_addr is None:
-                continue
             try:
                 info = inspect_ipv4(packet)
             except ProtocolError:
                 continue
-            if info.destination != session.client_vip:
+            session = self.sessions_by_vip.get(info.destination)
+            if session is None or session.client_addr is None:
                 continue
             self._send_udp(session, PACKET_TYPE_DATA, packet[: info.total_length])
 
     async def session_timeout_loop(self) -> None:
         while True:
             await asyncio.sleep(5)
-            session = self.active_session
-            if session is None:
-                continue
-            if time.monotonic() - session.last_seen <= self.config.session_timeout:
-                continue
-            print(f"client {session.client_id} timed out")
-            self.active_session = None
-            writer = session.control_writer
-            if writer is not None:
-                writer.close()
+            for session in list(self.sessions_by_id.values()):
+                if time.monotonic() - session.last_seen <= self.config.session_timeout:
+                    continue
+                print(f"client {session.client_id} timed out")
+                self._remove_session(session)
+                writer = session.control_writer
+                if writer is not None:
+                    writer.close()
 
     def _send_udp(self, session: ActiveSession, packet_type: int, plaintext: bytes) -> None:
         if self.udp_transport is None or session.client_addr is None:
@@ -295,10 +333,12 @@ class VpnServer:
         self.udp_transport.sendto(data, session.client_addr)
 
     async def cleanup(self) -> None:
-        session = self.active_session
-        self.active_session = None
-        if session is not None and session.control_writer is not None:
-            await self._close_writer(session.control_writer)
+        sessions = list(self.sessions_by_id.values())
+        self.sessions_by_id.clear()
+        self.sessions_by_vip.clear()
+        for session in sessions:
+            if session.control_writer is not None:
+                await self._close_writer(session.control_writer)
         if self.udp_transport is not None:
             self.udp_transport.close()
             await asyncio.sleep(0)
@@ -313,6 +353,46 @@ class VpnServer:
             await asyncio.wait_for(writer.wait_closed(), timeout=2)
         except Exception as exc:  # noqa: BLE001
             print(f"ignored control close error: {exc}")
+
+
+def build_client_pool(
+    subnet: str,
+    server_vip: str,
+    first_client_vip: str,
+    max_clients: int,
+) -> tuple[ipaddress.IPv4Address, ...]:
+    if not MIN_MAX_CLIENTS <= max_clients <= MAX_MAX_CLIENTS:
+        raise ValueError("max clients must be from 1 to 10")
+    network = ipaddress.IPv4Network(subnet, strict=False)
+    server_address = ipaddress.IPv4Address(server_vip)
+    first_address = ipaddress.IPv4Address(first_client_vip)
+    if server_address not in network:
+        raise ValueError(f"server VIP {server_address} is outside subnet {network}")
+    if first_address not in network:
+        raise ValueError(f"client VIP {first_address} is outside subnet {network}")
+
+    addresses: list[ipaddress.IPv4Address] = []
+    current = int(first_address)
+    last_usable = int(network.broadcast_address) - 1
+    while current <= last_usable and len(addresses) < max_clients:
+        address = ipaddress.IPv4Address(current)
+        if address != server_address and address != network.network_address:
+            addresses.append(address)
+        current += 1
+
+    if len(addresses) < max_clients:
+        raise ValueError(f"subnet {network} does not have {max_clients} usable client addresses")
+    return tuple(addresses)
+
+
+def parse_max_clients(value: str) -> int:
+    try:
+        max_clients = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("max clients must be an integer from 1 to 10") from exc
+    if not MIN_MAX_CLIENTS <= max_clients <= MAX_MAX_CLIENTS:
+        raise argparse.ArgumentTypeError("max clients must be from 1 to 10")
+    return max_clients
 
 
 def _token_from_arg(value: str | None) -> str:
@@ -339,6 +419,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mtu", type=int, default=DEFAULT_MTU)
     parser.add_argument("--external-interface")
     parser.add_argument("--session-timeout", type=float, default=60.0)
+    parser.add_argument("--max-clients", type=parse_max_clients, default=DEFAULT_MAX_CLIENTS)
     return parser
 
 
@@ -360,6 +441,7 @@ async def async_main(argv: list[str] | None = None) -> None:
         mtu=args.mtu,
         external_interface=args.external_interface,
         session_timeout=args.session_timeout,
+        max_clients=args.max_clients,
     )
     await VpnServer(config).run()
 

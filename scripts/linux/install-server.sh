@@ -12,6 +12,7 @@ Options:
   --control-port PORT      TLS control port. Default: 8443.
   --udp-port PORT          UDP tunnel port. Default: 8444.
   --dns IP                 DNS server pushed to clients. Default: 1.1.1.1.
+  --max-clients N          Max simultaneous clients for the shared token. Default: 3. Range: 1-10.
   --install-dir DIR        Virtualenv install directory. Default: /opt/pyvpn.
   --config-dir DIR         Runtime config directory. Default: /etc/pyvpn.
   --force-cert             Regenerate server certificate even when one exists.
@@ -28,6 +29,7 @@ TOKEN=""
 CONTROL_PORT="8443"
 UDP_PORT="8444"
 DNS="1.1.1.1"
+MAX_CLIENTS="3"
 INSTALL_DIR="/opt/pyvpn"
 CONFIG_DIR="/etc/pyvpn"
 FORCE_CERT="0"
@@ -52,6 +54,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dns)
       DNS="${2:-}"
+      shift 2
+      ;;
+    --max-clients)
+      MAX_CLIENTS="${2:-}"
       shift 2
       ;;
     --install-dir)
@@ -107,8 +113,14 @@ validate_env_value "public host" "$PUBLIC_HOST"
 validate_env_value "control port" "$CONTROL_PORT"
 validate_env_value "UDP port" "$UDP_PORT"
 validate_env_value "DNS" "$DNS"
+validate_env_value "max clients" "$MAX_CLIENTS"
 validate_env_value "install dir" "$INSTALL_DIR"
 validate_env_value "config dir" "$CONFIG_DIR"
+
+if [[ ! "$MAX_CLIENTS" =~ ^[0-9]+$ || "$MAX_CLIENTS" -lt 1 || "$MAX_CLIENTS" -gt 10 ]]; then
+  echo "--max-clients must be an integer from 1 to 10." >&2
+  exit 2
+fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
@@ -200,6 +212,7 @@ PYVPN_CLIENT_VIP=10.8.0.2
 PYVPN_DNS=$DNS
 PYVPN_MTU=1280
 PYVPN_SESSION_TIMEOUT=60
+PYVPN_MAX_CLIENTS=$MAX_CLIENTS
 EOF
 chmod 600 "$CONFIG_DIR/server.env"
 
@@ -212,7 +225,7 @@ After=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$CONFIG_DIR/server.env
-ExecStart=$INSTALL_DIR/venv/bin/pyvpn-server --listen-host \${PYVPN_LISTEN_HOST} --control-port \${PYVPN_CONTROL_PORT} --udp-port \${PYVPN_UDP_PORT} --public-host \${PYVPN_PUBLIC_HOST} --cert \${PYVPN_CERT} --key \${PYVPN_KEY} --tun \${PYVPN_TUN} --subnet \${PYVPN_SUBNET} --server-vip \${PYVPN_SERVER_VIP} --client-vip \${PYVPN_CLIENT_VIP} --dns \${PYVPN_DNS} --mtu \${PYVPN_MTU} --session-timeout \${PYVPN_SESSION_TIMEOUT}
+ExecStart=$INSTALL_DIR/venv/bin/pyvpn-server --listen-host \${PYVPN_LISTEN_HOST} --control-port \${PYVPN_CONTROL_PORT} --udp-port \${PYVPN_UDP_PORT} --public-host \${PYVPN_PUBLIC_HOST} --cert \${PYVPN_CERT} --key \${PYVPN_KEY} --tun \${PYVPN_TUN} --subnet \${PYVPN_SUBNET} --server-vip \${PYVPN_SERVER_VIP} --client-vip \${PYVPN_CLIENT_VIP} --dns \${PYVPN_DNS} --mtu \${PYVPN_MTU} --session-timeout \${PYVPN_SESSION_TIMEOUT} --max-clients \${PYVPN_MAX_CLIENTS}
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=10
@@ -272,6 +285,7 @@ Open these firewall ports on the VPS:
 Client settings:
   server host: $PUBLIC_HOST
   control port: $CONTROL_PORT
+  max clients: $MAX_CLIENTS
   token ($TOKEN_STATUS): $TOKEN
   cert fingerprint: $FINGERPRINT
 

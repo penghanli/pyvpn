@@ -1,6 +1,6 @@
 # pyvpn
 
-`pyvpn` is a v1 layer-3 VPN implementation for a single self-owned client.
+`pyvpn` is a v1 layer-3 VPN implementation for a small self-owned client set.
 The Linux server creates a TUN interface, NATs the client subnet to the public
 interface, and forwards encrypted UDP tunnel packets. The Linux client creates a
 TUN interface, installs a server bypass route, moves the IPv4 default route and
@@ -100,12 +100,15 @@ Save the printed SHA-256 fingerprint. The client pins this value.
 ## Run the server on a Linux VPS
 
 Open both ports in the VPS firewall first: TCP `8443` and UDP `8444`.
+By default, one shared token can have 3 simultaneous clients. Configure this
+with `--max-clients 1..10` on the server.
 
 ```bash
 sudo PYVPN_TOKEN='replace-with-a-long-random-token' pyvpn-server \
   --cert server.crt \
   --key server.key \
-  --public-host vpn.example.com
+  --public-host vpn.example.com \
+  --max-clients 3
 ```
 
 The server creates `pyvpn0`, enables IPv4 forwarding, and installs NAT through
@@ -125,7 +128,8 @@ settings on shutdown.
 
 ## Important v1 limits
 
-- Single active client only.
+- One shared token supports up to `--max-clients` simultaneous clients, from 1
+  to 10. The default is 3.
 - IPv4 forwarding only. Block IPv6 separately on the client firewall if leak
   prevention matters.
 - Windows client support is experimental and depends on Wintun. Use elevated
