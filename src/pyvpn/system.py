@@ -18,6 +18,13 @@ def require_linux_root() -> None:
         raise PlatformError("this operation must run as root")
 
 
+def require_macos_root() -> None:
+    if platform.system() != "Darwin":
+        raise PlatformError("this operation is only implemented on macOS")
+    if os.geteuid() != 0:
+        raise PlatformError("this operation must run with sudo/root")
+
+
 def require_windows_admin() -> None:
     if platform.system() != "Windows":
         raise PlatformError("this operation is only implemented on Windows")

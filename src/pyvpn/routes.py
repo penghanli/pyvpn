@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import shlex
 import socket
 from dataclasses import dataclass, field
@@ -42,6 +43,39 @@ def _route_get(ip: str) -> RouteInfo:
 
 def _ps_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
+
+
+def _mac_default_route() -> RouteInfo:
+    result = run(["route", "-n", "get", "default"])
+    fields: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        values = value.strip().split()
+        if values:
+            fields[key.strip()] = values[0]
+    return RouteInfo(
+        via=fields.get("gateway"),
+        dev=fields.get("interface"),
+        src=fields.get("ifscope"),
+    )
+
+
+def _mac_service_for_device(device: str) -> str | None:
+    if not command_exists("networksetup"):
+        return None
+    result = run(["networksetup", "-listallhardwareports"], check=False)
+    if result.returncode != 0:
+        return None
+    current_service: str | None = None
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("Hardware Port: "):
+            current_service = line.split(": ", 1)[1]
+        elif line.startswith("Device: ") and line.split(": ", 1)[1] == device:
+            return current_service
+    return None
 
 
 @dataclass
@@ -187,6 +221,135 @@ class LinuxClientNetwork:
 
         for server_ip in self.bypassed_ips:
             run(["ip", "route", "del", f"{server_ip}/32"], check=False)
+
+
+@dataclass
+class MacDnsManager:
+    interface: str
+    dns: str
+    manage_dns: bool = True
+    state_path: Path = Path("/var/run/pyvpn/macos-dns-state.json")
+    service: str | None = None
+    previous_dns: list[str] | None = None
+
+    def setup(self) -> None:
+        if not self.manage_dns:
+            return
+        self.service = _mac_service_for_device(self.interface)
+        if not self.service:
+            return
+        result = run(["networksetup", "-getdnsservers", self.service], check=False)
+        self.previous_dns = []
+        if result.returncode == 0:
+            lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            if lines and not lines[0].startswith("There aren't any DNS Servers"):
+                self.previous_dns = lines
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.state_path.write_text(
+            json.dumps({"service": self.service, "dns": self.previous_dns}),
+            encoding="utf-8",
+        )
+        run(["networksetup", "-setdnsservers", self.service, self.dns])
+
+    def cleanup(self) -> None:
+        if not self.manage_dns:
+            return
+        service = self.service
+        previous_dns = self.previous_dns
+        if self.state_path.exists():
+            try:
+                state = json.loads(self.state_path.read_text(encoding="utf-8"))
+                service = str(state.get("service") or service or "")
+                dns_value = state.get("dns")
+                if isinstance(dns_value, list):
+                    previous_dns = [str(item) for item in dns_value]
+            except (OSError, json.JSONDecodeError):
+                pass
+        if service:
+            if previous_dns:
+                run(["networksetup", "-setdnsservers", service, *previous_dns], check=False)
+            else:
+                run(["networksetup", "-setdnsservers", service, "Empty"], check=False)
+        try:
+            self.state_path.unlink()
+        except OSError:
+            pass
+
+
+@dataclass
+class MacClientNetwork:
+    tun_name: str
+    server_ips: list[str]
+    gateway: str
+    dns: str
+    manage_dns: bool = True
+    bypassed_ips: list[str] = field(default_factory=list)
+    dns_manager: MacDnsManager | None = None
+    default_gateway: str | None = None
+    default_interface: str | None = None
+
+    def setup(self) -> None:
+        if not self.server_ips:
+            raise PlatformError("no server route targets configured")
+
+        default_route = _mac_default_route()
+        self.default_gateway = default_route.via
+        self.default_interface = default_route.dev
+        if self.default_gateway is None and self.default_interface is None:
+            raise PlatformError("could not determine the current macOS default route")
+
+        for server_ip in dict.fromkeys(self.server_ips):
+            run(["route", "-n", "delete", "-host", server_ip], check=False)
+            if self.default_gateway:
+                run(["route", "-n", "add", "-host", server_ip, self.default_gateway])
+            else:
+                run(
+                    [
+                        "route",
+                        "-n",
+                        "add",
+                        "-host",
+                        server_ip,
+                        "-interface",
+                        str(self.default_interface),
+                    ]
+                )
+            self.bypassed_ips.append(server_ip)
+
+        for network in ("0.0.0.0", "128.0.0.0"):
+            run(
+                ["route", "-n", "delete", "-net", network, "-netmask", "128.0.0.0"],
+                check=False,
+            )
+            run(
+                [
+                    "route",
+                    "-n",
+                    "add",
+                    "-net",
+                    network,
+                    "-netmask",
+                    "128.0.0.0",
+                    self.gateway,
+                ]
+            )
+
+        dns_interface = self.default_interface or self.tun_name
+        self.dns_manager = MacDnsManager(dns_interface, self.dns, self.manage_dns)
+        self.dns_manager.setup()
+
+    def cleanup(self) -> None:
+        if self.dns_manager is not None:
+            self.dns_manager.cleanup()
+
+        for network in ("0.0.0.0", "128.0.0.0"):
+            run(
+                ["route", "-n", "delete", "-net", network, "-netmask", "128.0.0.0"],
+                check=False,
+            )
+
+        for server_ip in self.bypassed_ips:
+            run(["route", "-n", "delete", "-host", server_ip], check=False)
 
 
 @dataclass

@@ -88,8 +88,11 @@ sudo timeout 60 pyvpn-client-start
 The protocol code is shared, but platform packaging differs:
 
 - Windows: use the Wintun-based client path in `docs/windows-client.md`.
-- macOS: build the `macos/` NetworkExtension target in Xcode and connect its
-  packet flow to the shared pyvpn protocol.
+- macOS: use the experimental sudo-based `utun` CLI path in
+  `docs/macos-client.md` for direct testing. For production packaging, build the
+  `macos/` NetworkExtension target in Xcode and connect its packet flow to the
+  shared pyvpn protocol.
 
 Linux remains the most tested path. Windows is experimental and should be
-verified with IPv4-only tests first.
+verified with IPv4-only tests first. macOS CLI support is also experimental and
+should be tested on a non-critical network profile first.

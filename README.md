@@ -10,8 +10,9 @@ The Windows and macOS paths are intentionally explicit:
 
 - Windows uses Wintun. See `docs/windows-client.md` for the elevated PowerShell
   install and test flow.
-- macOS system-wide VPN needs a signed NetworkExtension packet tunnel. A Swift
-  skeleton is included under `macos/` and uses the same protocol contract.
+- macOS can run the experimental sudo-based `utun` CLI in `docs/macos-client.md`.
+  A production Mac app should still use the signed NetworkExtension skeleton
+  under `macos/`.
 
 ## One-command Linux deployment
 
@@ -57,6 +58,21 @@ boot by default. Use `sudo pyvpn-client-up` to connect in the background and
 `sudo pyvpn-client-start`.
 
 See `docs/deployment.md` for the full deployment flow.
+
+On a macOS client:
+
+```bash
+git clone <your-repo-url> pyvpn
+cd pyvpn
+sudo scripts/macos/install-client.sh \
+  --server-host <vps-public-ip-or-domain> \
+  --token '<token-from-server-installer>' \
+  --cert-fingerprint 'sha256:<fingerprint-from-server-installer>'
+sudo pyvpn-client-up
+```
+
+Use `sudo pyvpn-client-down` to disconnect and `sudo pyvpn-client-status` to
+check the background process.
 
 ## Development install
 
@@ -114,7 +130,7 @@ settings on shutdown.
   prevention matters.
 - Windows client support is experimental and depends on Wintun. Use elevated
   PowerShell and verify with `curl.exe -4 https://ifconfig.me`.
-- macOS is still a NetworkExtension skeleton and is not yet runnable as a full
-  system VPN client.
+- macOS CLI support is experimental and uses `utun` with `sudo`; the signed
+  NetworkExtension app path is still the right target for production packaging.
 - This is suitable for self-owned infrastructure testing, not a commercial VPN
   service.

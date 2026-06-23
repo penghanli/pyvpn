@@ -1,10 +1,11 @@
 # macOS NetworkExtension client
 
-macOS cannot provide a production system-wide VPN through a plain Python CLI.
-The system entrypoint is a signed `NEPacketTunnelProvider` extension.
+macOS production packaging should use a signed `NEPacketTunnelProvider`
+extension. For direct CLI testing, the Python client now has an experimental
+sudo-based `utun` path; see `docs/macos-client.md`.
 
 This folder contains the v1 integration skeleton. It is intentionally separate
-from the Python CLI:
+from the Python CLI packaging:
 
 1. Create an Xcode app target and a Packet Tunnel extension target.
 2. Add `PacketTunnelProvider.swift` to the extension target.

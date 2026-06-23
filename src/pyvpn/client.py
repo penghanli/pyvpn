@@ -21,9 +21,9 @@ from .framing import read_frame, write_frame
 from .ip import inspect_ipv4
 from .packet import open_packet, parse_header, seal_packet
 from .replay import ReplayWindow
-from .routes import LinuxClientNetwork, resolve_ipv4
+from .routes import LinuxClientNetwork, MacClientNetwork, resolve_ipv4
 from .routes import WindowsClientNetwork
-from .system import require_linux_root, require_windows_admin
+from .system import require_linux_root, require_macos_root, require_windows_admin
 from .tun import TunDevice, create_tun
 
 
@@ -75,7 +75,7 @@ class VpnClient:
     def __init__(self, config: ClientConfig):
         self.config = config
         self.tun: TunDevice | None = None
-        self.network: LinuxClientNetwork | WindowsClientNetwork | None = None
+        self.network: LinuxClientNetwork | MacClientNetwork | WindowsClientNetwork | None = None
         self.udp_transport: asyncio.DatagramTransport | None = None
         self.session: ClientSession | None = None
         self.server_udp_addr: tuple[str, int] | None = None
@@ -87,6 +87,8 @@ class VpnClient:
             require_linux_root()
         elif current_platform == "Windows":
             require_windows_admin()
+        elif current_platform == "Darwin":
+            require_macos_root()
         else:
             create_tun(self.config.tun_name, self.config.mtu)
             return
@@ -104,7 +106,12 @@ class VpnClient:
             self.tun = create_tun(self.config.tun_name, self.config.mtu)
             self.tun.configure_client(self.session.client_vip, self.session.server_vip)
 
-            network_cls = LinuxClientNetwork if current_platform == "Linux" else WindowsClientNetwork
+            if current_platform == "Linux":
+                network_cls = LinuxClientNetwork
+            elif current_platform == "Windows":
+                network_cls = WindowsClientNetwork
+            else:
+                network_cls = MacClientNetwork
             self.network = network_cls(
                 tun_name=self.tun.name,
                 server_ips=[server_ip, self.session.udp_host, *self.config.bypass_ips],
