@@ -20,6 +20,9 @@ Options:
   --config-dir DIR          Runtime config directory. Default: /Library/Application Support/pyvpn.
   --run-dir DIR             PID/stop-file directory. Default: /var/run/pyvpn.
   --log-dir DIR             Log directory. Default: /var/log/pyvpn.
+  --wheel-dir DIR           Install dependencies from a local wheel directory.
+  --pip-index-url URL       Use a custom pip index mirror for dependencies.
+  --skip-deps               Do not install Python dependencies.
   --no-dns                  Do not change client DNS while connected.
 
 After installation:
@@ -39,6 +42,9 @@ CONFIG_DIR="/Library/Application Support/pyvpn"
 RUN_DIR="/var/run/pyvpn"
 LOG_DIR="/var/log/pyvpn"
 NO_DNS="0"
+WHEEL_DIR=""
+PIP_INDEX_URL="${PYVPN_PIP_INDEX_URL:-}"
+SKIP_DEPS="0"
 BYPASS_IPS_CSV=""
 
 while [[ $# -gt 0 ]]; do
@@ -86,6 +92,18 @@ while [[ $# -gt 0 ]]; do
     --log-dir)
       LOG_DIR="${2:-}"
       shift 2
+      ;;
+    --wheel-dir)
+      WHEEL_DIR="${2:-}"
+      shift 2
+      ;;
+    --pip-index-url)
+      PIP_INDEX_URL="${2:-}"
+      shift 2
+      ;;
+    --skip-deps)
+      SKIP_DEPS="1"
+      shift
       ;;
     --no-dns)
       NO_DNS="1"
@@ -165,9 +183,28 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$RUN_DIR" "$LOG_DIR" /usr/local/bin
-python3 -m venv "$INSTALL_DIR/venv"
-"$INSTALL_DIR/venv/bin/python" -m pip install --upgrade pip
-"$INSTALL_DIR/venv/bin/python" -m pip install "$REPO_ROOT"
+python3 -m venv --system-site-packages "$INSTALL_DIR/venv"
+
+APP_DIR="$INSTALL_DIR/app"
+rm -rf "$APP_DIR"
+mkdir -p "$APP_DIR"
+cp -R "$REPO_ROOT/src" "$APP_DIR/src"
+
+PYTHON="$INSTALL_DIR/venv/bin/python"
+if [[ "$SKIP_DEPS" != "1" ]] && ! "$PYTHON" -c 'from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305' >/dev/null 2>&1; then
+  EFFECTIVE_WHEEL_DIR="$WHEEL_DIR"
+  if [[ -z "$EFFECTIVE_WHEEL_DIR" && -d "$REPO_ROOT/wheelhouse" ]]; then
+    EFFECTIVE_WHEEL_DIR="$REPO_ROOT/wheelhouse"
+  fi
+
+  if [[ -n "$EFFECTIVE_WHEEL_DIR" ]]; then
+    "$PYTHON" -m pip install --no-index --find-links "$EFFECTIVE_WHEEL_DIR" "cryptography>=42.0.0"
+  elif [[ -n "$PIP_INDEX_URL" ]]; then
+    "$PYTHON" -m pip install -i "$PIP_INDEX_URL" "cryptography>=42.0.0"
+  else
+    "$PYTHON" -m pip install "cryptography>=42.0.0"
+  fi
+fi
 
 cat > "$CONFIG_DIR/client.env" <<EOF
 PYVPN_SERVER_HOST=$SERVER_HOST
@@ -221,7 +258,7 @@ if [[ "\${PYVPN_NO_DNS:-0}" == "1" ]]; then
   ARGS+=(--no-dns)
 fi
 
-exec env PYVPN_TOKEN="\$PYVPN_TOKEN" "$INSTALL_DIR/venv/bin/pyvpn-client" "\${ARGS[@]}"
+exec env PYVPN_TOKEN="\$PYVPN_TOKEN" PYTHONPATH="$INSTALL_DIR/app/src" "$INSTALL_DIR/venv/bin/python" -m pyvpn.client "\${ARGS[@]}"
 EOF
 chmod 755 /usr/local/bin/pyvpn-client-start
 

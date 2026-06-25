@@ -25,10 +25,38 @@ sudo scripts/macos/install-client.sh \
   --cert-fingerprint 'sha256:<server-fingerprint>'
 ```
 
+The installer copies `src/` directly and runs it with `PYTHONPATH`; it does not
+build a pyvpn wheel, so it will not stop at `Preparing metadata (pyproject.toml)`.
+Only the `cryptography` runtime dependency may need pip.
+
+If PyPI is slow or blocked, use a mirror:
+
+```bash
+sudo scripts/macos/install-client.sh \
+  --server-host 51.79.147.199 \
+  --token '<token-from-server>' \
+  --cert-fingerprint 'sha256:<server-fingerprint>' \
+  --pip-index-url https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+For fully offline installation, put compatible wheels under `wheelhouse/` in the
+unzipped repo, or pass an explicit wheel directory:
+
+```bash
+python3 -m pip download --only-binary=:all: -d wheelhouse 'cryptography>=42.0.0'
+
+sudo scripts/macos/install-client.sh \
+  --server-host 51.79.147.199 \
+  --token '<token-from-server>' \
+  --cert-fingerprint 'sha256:<server-fingerprint>' \
+  --wheel-dir ./wheelhouse
+```
+
 The installer creates:
 
 ```text
 /opt/pyvpn-client/venv
+/opt/pyvpn-client/app/src
 /Library/Application Support/pyvpn/client.env
 /usr/local/bin/pyvpn-client-start
 /usr/local/bin/pyvpn-client-up
