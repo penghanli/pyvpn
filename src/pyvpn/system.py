@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import platform
 import shutil
+import shlex
 import subprocess
 from collections.abc import Sequence
 
@@ -48,14 +49,20 @@ def run(
     check: bool = True,
     input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    result = subprocess.run(
         list(args),
-        check=check,
+        check=False,
         text=True,
         input=input_text,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+    if check and result.returncode != 0:
+        command = " ".join(shlex.quote(str(arg)) for arg in args)
+        output = (result.stderr or result.stdout or "").strip()
+        detail = f": {output}" if output else ""
+        raise PlatformError(f"command failed ({result.returncode}): {command}{detail}")
+    return result
 
 
 def run_powershell(script: str, *, check: bool = True) -> subprocess.CompletedProcess[str]:

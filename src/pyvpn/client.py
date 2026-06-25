@@ -94,7 +94,12 @@ class VpnClient:
             return
         self._install_signal_handlers()
 
+        print(
+            f"connecting to {self.config.server_host}:{self.config.control_port}",
+            flush=True,
+        )
         server_ip = resolve_ipv4(self.config.server_host)
+        print(f"resolved server IPv4: {server_ip}", flush=True)
         reader, writer = await self._open_control()
         try:
             await self._send_hello(writer)
@@ -102,9 +107,17 @@ class VpnClient:
             if accept.get("type") == "error":
                 raise AuthenticationError(str(accept.get("message", "server rejected client")))
             self.session = self._parse_accept(accept)
+            print(
+                "control session accepted: "
+                f"client_vip={self.session.client_vip} "
+                f"server_vip={self.session.server_vip} "
+                f"udp={self.session.udp_host}:{self.session.udp_port}",
+                flush=True,
+            )
 
             self.tun = create_tun(self.config.tun_name, self.config.mtu)
             self.tun.configure_client(self.session.client_vip, self.session.server_vip)
+            print(f"TUN interface ready: {self.tun.name}", flush=True)
 
             if current_platform == "Linux":
                 network_cls = LinuxClientNetwork
@@ -120,6 +133,7 @@ class VpnClient:
                 manage_dns=self.config.manage_dns,
             )
             self.network.setup()
+            print("client routes and DNS configured", flush=True)
 
             loop = asyncio.get_running_loop()
             self.udp_transport, _ = await loop.create_datagram_endpoint(
@@ -128,6 +142,7 @@ class VpnClient:
             )
             self.server_udp_addr = (self.session.udp_host, self.session.udp_port)
             self._send_udp(PACKET_TYPE_KEEPALIVE, b"")
+            print("VPN tunnel is running", flush=True)
 
             tasks = [
                 asyncio.create_task(self.tun_to_udp_loop()),

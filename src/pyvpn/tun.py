@@ -285,20 +285,7 @@ class MacUtunDevice(TunDevice):
             result = fcntl.ioctl(sock.fileno(), CTLIOCGINFO, ctl_info)
             ctl_id = struct.unpack("I", result[:4])[0]
             unit = _utun_unit_from_name(name)
-            sockaddr_ctl = struct.pack(
-                "BBHII5I",
-                32,
-                AF_SYSTEM,
-                AF_SYS_CONTROL,
-                ctl_id,
-                unit,
-                0,
-                0,
-                0,
-                0,
-                0,
-            )
-            sock.connect(sockaddr_ctl)
+            sock.connect((ctl_id, unit))
             actual_name = sock.getsockopt(
                 SYSPROTO_CONTROL,
                 UTUN_OPT_IFNAME,

@@ -287,19 +287,45 @@ rm -f "\$STOP_FILE" "\$PID_FILE"
 nohup /usr/local/bin/pyvpn-client-start >"\$LOG_FILE" 2>"\$ERR_FILE" &
 PID="\$!"
 echo "\$PID" > "\$PID_FILE"
-sleep 2
+ROUTE_OK="0"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  sleep 1
 
-if ! kill -0 "\$PID" >/dev/null 2>&1; then
-  if [[ -f "\$LOG_FILE" ]]; then tail -n 80 "\$LOG_FILE"; fi
-  if [[ -f "\$ERR_FILE" ]]; then tail -n 80 "\$ERR_FILE"; fi
+  if ! kill -0 "\$PID" >/dev/null 2>&1; then
+    if [[ -f "\$LOG_FILE" ]]; then tail -n 80 "\$LOG_FILE"; fi
+    if [[ -f "\$ERR_FILE" ]]; then tail -n 80 "\$ERR_FILE"; fi
+    rm -f "\$PID_FILE"
+    echo "pyvpn client failed to start" >&2
+    exit 1
+  fi
+
+  if route -n get 1.1.1.1 2>/dev/null | grep -Eq 'interface:[[:space:]]+utun[0-9]+'; then
+    ROUTE_OK="1"
+    break
+  fi
+done
+
+if [[ "\$ROUTE_OK" != "1" ]]; then
+  echo "pyvpn client started, but macOS routing did not switch to utun." >&2
+  echo "Route to 1.1.1.1:" >&2
+  route -n get 1.1.1.1 >&2 || true
+  echo "Recent log:" >&2
+  if [[ -f "\$LOG_FILE" ]]; then tail -n 80 "\$LOG_FILE" >&2; fi
+  echo "Recent error log:" >&2
+  if [[ -f "\$ERR_FILE" ]]; then tail -n 80 "\$ERR_FILE" >&2; fi
+  touch "\$STOP_FILE" >/dev/null 2>&1 || true
+  sleep 2
+  if kill -0 "\$PID" >/dev/null 2>&1; then
+    kill "\$PID" >/dev/null 2>&1 || true
+  fi
   rm -f "\$PID_FILE"
-  echo "pyvpn client failed to start" >&2
   exit 1
 fi
 
 echo "pyvpn client started in the background with PID \$PID"
 echo "Log: \$LOG_FILE"
 echo "Error log: \$ERR_FILE"
+echo "Route check: 1.1.1.1 is using utun"
 EOF
 chmod 755 /usr/local/bin/pyvpn-client-up
 
@@ -401,6 +427,10 @@ else
 fi
 echo "Log: \$LOG_FILE"
 echo "Error log: \$ERR_FILE"
+echo "Route to 1.1.1.1:"
+route -n get 1.1.1.1 || true
+echo "pyvpn IPv4 routes:"
+netstat -rn -f inet | grep -E '(^default|^0/1|^128\\.0/1|10\\.8\\.)' || true
 if [[ -f "\$ERR_FILE" ]]; then tail -n 40 "\$ERR_FILE"; fi
 EOF
 chmod 755 /usr/local/bin/pyvpn-client-status

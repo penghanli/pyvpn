@@ -46,7 +46,11 @@ def _ps_quote(value: str) -> str:
 
 
 def _mac_default_route() -> RouteInfo:
-    result = run(["route", "-n", "get", "default"])
+    return _mac_route_get("default")
+
+
+def _mac_route_get(destination: str) -> RouteInfo:
+    result = run(["route", "-n", "get", destination])
     fields: dict[str, str] = {}
     for line in result.stdout.splitlines():
         if ":" not in line:
@@ -60,6 +64,18 @@ def _mac_default_route() -> RouteInfo:
         dev=fields.get("interface"),
         src=fields.get("ifscope"),
     )
+
+
+def _run_macos_route_add_or_change(add_args: list[str], change_args: list[str]) -> None:
+    result = run(add_args, check=False)
+    if result.returncode == 0:
+        return
+    change_result = run(change_args, check=False)
+    if change_result.returncode == 0:
+        return
+    output = (change_result.stderr or result.stderr or change_result.stdout or result.stdout).strip()
+    detail = f": {output}" if output else ""
+    raise PlatformError(f"could not install macOS route{detail}")
 
 
 def _mac_service_for_device(device: str) -> str | None:
@@ -321,23 +337,50 @@ class MacClientNetwork:
                 ["route", "-n", "delete", "-net", network, "-netmask", "128.0.0.0"],
                 check=False,
             )
-            run(
-                [
-                    "route",
-                    "-n",
-                    "add",
-                    "-net",
-                    network,
-                    "-netmask",
-                    "128.0.0.0",
-                    "-interface",
-                    self.tun_name,
-                ]
-            )
+            add_args = [
+                "route",
+                "-n",
+                "add",
+                "-net",
+                network,
+                "-netmask",
+                "128.0.0.0",
+                self.gateway,
+            ]
+            change_args = [
+                "route",
+                "-n",
+                "change",
+                "-net",
+                network,
+                "-netmask",
+                "128.0.0.0",
+                self.gateway,
+            ]
+            _run_macos_route_add_or_change(add_args, change_args)
+
+        self._verify_split_routes()
 
         dns_interface = self.default_interface or self.tun_name
         self.dns_manager = MacDnsManager(dns_interface, self.dns, self.manage_dns)
         self.dns_manager.setup()
+
+    def _verify_split_routes(self) -> None:
+        for probe in ("1.1.1.1", "129.0.0.1"):
+            route = _mac_route_get(probe)
+            if route.dev != self.tun_name:
+                raise PlatformError(
+                    "macOS route verification failed: "
+                    f"{probe} uses {route.dev or 'unknown'} via {route.via or 'unknown'}, "
+                    f"expected {self.tun_name}"
+                )
+
+        server_route = _mac_route_get(self.server_ips[0])
+        if server_route.dev == self.tun_name:
+            raise PlatformError(
+                "macOS server bypass route verification failed: "
+                f"{self.server_ips[0]} still uses {self.tun_name}"
+            )
 
     def cleanup(self) -> None:
         if self.dns_manager is not None:
