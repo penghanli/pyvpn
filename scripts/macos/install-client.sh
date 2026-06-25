@@ -160,7 +160,7 @@ if [[ ! -f "$REPO_ROOT/pyproject.toml" ]]; then
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required. Install Python 3 first, for example: brew install python" >&2
+  echo "python3 3.9+ is required. Install Python 3 first, for example: brew install python" >&2
   exit 1
 fi
 

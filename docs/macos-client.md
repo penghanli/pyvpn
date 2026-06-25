@@ -7,7 +7,7 @@ signed NetworkExtension path under `macos/`.
 
 ## Install
 
-Install Python 3 first if `python3` is missing:
+Install Python 3.9+ first if `python3` is missing:
 
 ```bash
 brew install python

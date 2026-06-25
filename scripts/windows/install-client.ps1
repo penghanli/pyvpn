@@ -40,7 +40,7 @@ function Resolve-Python {
     if ($python) {
         return @($python.Source)
     }
-    throw "Python 3.11+ is required. Install Python from python.org first."
+    throw "Python 3.9+ is required. Install Python from python.org first."
 }
 
 function Get-WintunArch {
