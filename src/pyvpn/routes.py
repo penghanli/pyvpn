@@ -330,7 +330,8 @@ class MacClientNetwork:
                     network,
                     "-netmask",
                     "128.0.0.0",
-                    self.gateway,
+                    "-interface",
+                    self.tun_name,
                 ]
             )
 
