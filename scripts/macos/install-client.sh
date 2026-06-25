@@ -39,7 +39,7 @@ CONFIG_DIR="/Library/Application Support/pyvpn"
 RUN_DIR="/var/run/pyvpn"
 LOG_DIR="/var/log/pyvpn"
 NO_DNS="0"
-BYPASS_IPS=()
+BYPASS_IPS_CSV=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -60,7 +60,11 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --bypass-ip)
-      BYPASS_IPS+=("${2:-}")
+      if [[ -n "$BYPASS_IPS_CSV" ]]; then
+        BYPASS_IPS_CSV="$BYPASS_IPS_CSV,${2:-}"
+      else
+        BYPASS_IPS_CSV="${2:-}"
+      fi
       shift 2
       ;;
     --tun)
@@ -131,14 +135,21 @@ validate_env_value "control port" "$CONTROL_PORT"
 validate_env_value "tun name" "$TUN_NAME"
 
 if [[ -n "${SSH_CLIENT:-}" ]]; then
-  BYPASS_IPS+=("${SSH_CLIENT%% *}")
+  if [[ -n "$BYPASS_IPS_CSV" ]]; then
+    BYPASS_IPS_CSV="$BYPASS_IPS_CSV,${SSH_CLIENT%% *}"
+  else
+    BYPASS_IPS_CSV="${SSH_CLIENT%% *}"
+  fi
 fi
 
-for bypass_ip in "${BYPASS_IPS[@]}"; do
-  validate_env_value "bypass IP" "$bypass_ip"
-done
-
-BYPASS_IPS_CSV="$(IFS=,; echo "${BYPASS_IPS[*]}")"
+if [[ -n "$BYPASS_IPS_CSV" ]]; then
+  OLD_IFS="$IFS"
+  IFS=","
+  for bypass_ip in $BYPASS_IPS_CSV; do
+    validate_env_value "bypass IP" "$bypass_ip"
+  done
+  IFS="$OLD_IFS"
+fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
