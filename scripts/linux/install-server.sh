@@ -157,17 +157,7 @@ fi
 "$INSTALL_DIR/venv/bin/python" -m pip install "$REPO_ROOT[linux]"
 
 if [[ -z "$TOKEN" ]]; then
-  EXISTING_ENV="$CONFIG_DIR/server.env"
-  if [[ -f "$EXISTING_ENV" ]]; then
-    TOKEN="$(sed -n 's/^PYVPN_TOKEN=//p' "$EXISTING_ENV" | tail -n 1)"
-  fi
-fi
-
-if [[ -z "$TOKEN" ]]; then
   TOKEN="$("$INSTALL_DIR/venv/bin/python" -c 'import secrets; print(secrets.token_urlsafe(32))')"
-  TOKEN_STATUS="generated"
-else
-  TOKEN_STATUS="reused"
 fi
 validate_env_value "token" "$TOKEN"
 
@@ -290,7 +280,7 @@ Client settings:
   server host: $PUBLIC_HOST
   control port: $CONTROL_PORT
   max clients: $MAX_CLIENTS
-  token ($TOKEN_STATUS): $TOKEN
+  token: $TOKEN
   cert fingerprint: $FINGERPRINT
 
 EOF

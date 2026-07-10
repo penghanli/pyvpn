@@ -1,87 +1,307 @@
 # pyvpn
 
-`pyvpn` is a v1 layer-3 VPN implementation for a small self-owned client set.
+`pyvpn` is a v1 layer-3 VPN for a small self-owned client set.
+
 The Linux server creates a TUN interface, NATs the client subnet to the public
-interface, and forwards encrypted UDP tunnel packets. The Linux client creates a
-TUN interface, installs a server bypass route, moves the IPv4 default route and
-DNS to the tunnel, and restores the machine on exit.
+interface, and forwards encrypted UDP tunnel packets. Clients create a system
+TUN adapter, install a bypass route for the server IP, move IPv4 traffic and DNS
+to the tunnel, and restore local networking when disconnected.
 
-The Windows and macOS paths are intentionally explicit:
+## Current Scope
 
-- Windows uses Wintun. See `docs/windows-client.md` for the elevated PowerShell
-  install and test flow.
-- macOS can run the experimental sudo-based `utun` CLI in `docs/macos-client.md`.
-  A production Mac app should still use the signed NetworkExtension skeleton
-  under `macos/`.
+- Server: Linux VPS only.
+- Clients: Linux, Windows, and experimental macOS CLI.
+- Tunnel: IPv4 over encrypted UDP.
+- Control channel: TLS with token authentication and certificate fingerprint
+  pinning.
+- Default ports: TCP `8443` for control, UDP `8444` for tunnel data.
 
-## One-command Linux deployment
+## Server Setup
 
-For the simple VPS flow, clone the repo on the server and install a systemd
-service:
+### Linux VPS
 
-```bash
-git clone <your-repo-url> pyvpn
-cd pyvpn
-sudo scripts/linux/install-server.sh --public-host <vps-public-ip-or-domain>
+Open both ports in the VPS firewall and cloud security group first:
+
+```text
+TCP 8443
+UDP 8444
 ```
 
-The server continues running after SSH disconnects. Use:
+Then clone and install the server:
+
+```bash
+git clone https://github.com/penghanli/pyvpn.git
+cd pyvpn
+
+sudo scripts/linux/install-server.sh \
+  --public-host <vps-public-ip-or-domain> \
+  --max-clients 3
+```
+
+The installer creates a `systemd` service and prints the values needed by every
+client:
+
+```text
+Client settings:
+  server host: <vps-public-ip-or-domain>
+  control port: 8443
+  max clients: 3
+  token: <shared-token>
+  cert fingerprint: sha256:<server-fingerprint>
+```
+
+Server management:
 
 ```bash
 sudo pyvpn-server-status
 sudo pyvpn-server-logs
 sudo pyvpn-server-restart
+sudo systemctl stop pyvpn-server
 ```
 
-On a Linux client:
+Check that the server is listening:
 
 ```bash
-git clone <your-repo-url> pyvpn
+sudo ss -lntup | grep -E '8443|8444'
+```
+
+Expected listeners:
+
+```text
+0.0.0.0:8443/tcp
+0.0.0.0:8444/udp
+```
+
+## Client Setup
+
+Use the `server host`, `token`, and `cert fingerprint` printed by the Linux
+server installer.
+
+If a checkout already exists, run `git pull` inside it instead of cloning again.
+
+### Linux Client
+
+Install:
+
+```bash
+git clone https://github.com/penghanli/pyvpn.git
 cd pyvpn
+
 sudo scripts/linux/install-client.sh \
-  --server-host <vps-public-ip-or-domain> \
-  --token '<token-from-server-installer>' \
-  --cert-fingerprint 'sha256:<fingerprint-from-server-installer>'
-sudo pyvpn-client-up
+  --server-host <server-host> \
+  --token '<shared-token>' \
+  --cert-fingerprint 'sha256:<server-fingerprint>'
 ```
 
-When installing over SSH, the client installer preserves the current SSH source
-IP outside the VPN so the management connection can still return through the
-normal gateway.
-The Linux client also installs a temporary policy route for the VPS public
-source IP, so inbound SSH replies keep using the original gateway while the
-machine's ordinary outbound traffic goes through the VPN.
-
-The Linux client installer creates a systemd service but does not enable it at
-boot by default. Use `sudo pyvpn-client-up` to connect in the background and
-`sudo pyvpn-client-down` to disconnect. For foreground debugging, use
-`sudo pyvpn-client-start`.
-
-See `docs/deployment.md` for the full deployment flow.
-
-On a macOS client:
+Connect:
 
 ```bash
-git clone <your-repo-url> pyvpn
-cd pyvpn
-sudo scripts/macos/install-client.sh \
-  --server-host <vps-public-ip-or-domain> \
-  --token '<token-from-server-installer>' \
-  --cert-fingerprint 'sha256:<fingerprint-from-server-installer>'
 sudo pyvpn-client-up
 ```
 
-Use `sudo pyvpn-client-down` to disconnect and `sudo pyvpn-client-status` to
-check the background process.
+Disconnect:
 
-## Development install
+```bash
+sudo pyvpn-client-down
+```
+
+Status and logs:
+
+```bash
+sudo pyvpn-client-status
+journalctl -u pyvpn-client -n 80 --no-pager
+```
+
+Verify:
+
+```bash
+curl -4 https://ifconfig.me
+ip route get 1.1.1.1
+ip route
+```
+
+The IPv4 curl result should be the server public IP.
+
+When installing over SSH, the Linux installer preserves the current SSH source
+IP outside the VPN so the management connection can still return through the
+normal gateway. The client service is installed but not enabled at boot by
+default.
+
+### Windows Client
+
+Run everything from an elevated PowerShell window.
+
+Install:
+
+```powershell
+git clone https://github.com/penghanli/pyvpn.git
+cd pyvpn
+
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\install-client.ps1 `
+  -ServerHost <server-host> `
+  -Token '<shared-token>' `
+  -CertFingerprint 'sha256:<server-fingerprint>'
+```
+
+The installer downloads and verifies Wintun, creates a virtual environment, and
+writes helper scripts under `C:\Program Files\pyvpn-client`.
+
+Connect:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-up.ps1"
+```
+
+Disconnect:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-down.ps1"
+```
+
+Status and logs:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-status.ps1"
+Get-Content "C:\ProgramData\pyvpn\client.log" -Tail 80
+Get-Content "C:\ProgramData\pyvpn\client.err.log" -Tail 80
+```
+
+Verify:
+
+```powershell
+Test-NetConnection <server-host> -Port 8443
+
+curl.exe -4 https://ifconfig.me
+echo ""
+
+Get-NetRoute -AddressFamily IPv4 |
+  Where-Object {
+    $_.DestinationPrefix -in @(
+      "0.0.0.0/1",
+      "128.0.0.0/1",
+      "<server-ip>/32",
+      "0.0.0.0/0"
+    )
+  } |
+  Sort-Object DestinationPrefix, RouteMetric |
+  Format-Table DestinationPrefix, NextHop, InterfaceAlias, RouteMetric -AutoSize
+
+tracert -4 1.1.1.1
+```
+
+The IPv4 curl result should be the server public IP, and the first traceroute
+hop should be `10.8.0.1`.
+
+Foreground debug mode:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-start.ps1"
+```
+
+### macOS Client
+
+The macOS CLI client is experimental. It uses the native `utun` kernel control
+from Python and must run with `sudo`. A production macOS app should use the
+signed NetworkExtension path under `macos/`.
+
+Install Python 3.9+ first if `python3` is missing:
+
+```bash
+brew install python
+```
+
+Install:
+
+```bash
+git clone https://github.com/penghanli/pyvpn.git
+cd pyvpn
+
+sudo scripts/macos/install-client.sh \
+  --server-host <server-host> \
+  --token '<shared-token>' \
+  --cert-fingerprint 'sha256:<server-fingerprint>' \
+  --tun auto
+```
+
+If PyPI is slow or blocked, use a mirror:
+
+```bash
+sudo scripts/macos/install-client.sh \
+  --server-host <server-host> \
+  --token '<shared-token>' \
+  --cert-fingerprint 'sha256:<server-fingerprint>' \
+  --pip-index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+  --tun auto
+```
+
+For offline or repeatable installs, build a local wheelhouse on the target Mac:
+
+```bash
+rm -rf wheelhouse
+mkdir -p wheelhouse
+
+python3 -m pip download \
+  --only-binary=:all: \
+  -d wheelhouse \
+  -i https://pypi.tuna.tsinghua.edu.cn/simple \
+  'cryptography>=42.0.0'
+
+sudo scripts/macos/install-client.sh \
+  --server-host <server-host> \
+  --token '<shared-token>' \
+  --cert-fingerprint 'sha256:<server-fingerprint>' \
+  --wheel-dir ./wheelhouse \
+  --tun auto
+```
+
+Connect:
+
+```bash
+sudo pyvpn-client-up
+```
+
+Disconnect:
+
+```bash
+sudo pyvpn-client-down
+```
+
+Status and logs:
+
+```bash
+sudo pyvpn-client-status
+sudo tail -f /var/log/pyvpn/client.log /var/log/pyvpn/client.err.log
+```
+
+Verify:
+
+```bash
+curl -4 https://ifconfig.me
+echo
+
+route -n get 1.1.1.1
+netstat -rn -f inet | grep -E '(^default|^0/1|^128\.0/1|10\.8\.)'
+```
+
+The IPv4 curl result should be the server public IP, and `route -n get 1.1.1.1`
+should show a `utun` interface.
+
+Foreground debug mode:
+
+```bash
+sudo pyvpn-client-start
+```
+
+## Development Install
+
+Windows:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -e ".[dev]"
 ```
 
-On Linux:
+Linux:
 
 ```bash
 python3 -m venv .venv
@@ -89,19 +309,16 @@ python3 -m venv .venv
 python -m pip install -e ".[dev,linux]"
 ```
 
-## Generate a server certificate
+## Manual Server Command
+
+The installer is the recommended server path. For manual testing, generate a
+certificate and run the server directly:
 
 ```bash
 pyvpn-cert --cert server.crt --key server.key --common-name pyvpn.local
 ```
 
-Save the printed SHA-256 fingerprint. The client pins this value.
-
-## Run the server on a Linux VPS
-
-Open both ports in the VPS firewall first: TCP `8443` and UDP `8444`.
-By default, one shared token can have 3 simultaneous clients. Configure this
-with `--max-clients 1..10` on the server.
+Save the printed SHA-256 fingerprint, then run:
 
 ```bash
 sudo PYVPN_TOKEN='replace-with-a-long-random-token' pyvpn-server \
@@ -111,30 +328,13 @@ sudo PYVPN_TOKEN='replace-with-a-long-random-token' pyvpn-server \
   --max-clients 3
 ```
 
-The server creates `pyvpn0`, enables IPv4 forwarding, and installs NAT through
-`nftables` when available, otherwise `iptables`.
-
-## Run a Linux client
-
-```bash
-sudo PYVPN_TOKEN='replace-with-a-long-random-token' pyvpn-client \
-  --server-host vpn.example.com \
-  --cert-fingerprint 'sha256:<fingerprint-from-pyvpn-cert>'
-```
-
-The client configures `pyvpn0`, protects the server IP with a host route, changes
-the IPv4 default route to the tunnel, sets DNS to `1.1.1.1`, and restores these
-settings on shutdown.
-
-## Important v1 limits
+## Important v1 Limits
 
 - One shared token supports up to `--max-clients` simultaneous clients, from 1
   to 10. The default is 3.
 - IPv4 forwarding only. Block IPv6 separately on the client firewall if leak
   prevention matters.
-- Windows client support is experimental and depends on Wintun. Use elevated
-  PowerShell and verify with `curl.exe -4 https://ifconfig.me`.
-- macOS CLI support is experimental and uses `utun` with `sudo`; the signed
-  NetworkExtension app path is still the right target for production packaging.
-- This is suitable for self-owned infrastructure testing, not a commercial VPN
-  service.
+- Windows client support is experimental and depends on Wintun.
+- macOS CLI support is experimental and uses `utun` with `sudo`.
+- The Python data plane is suitable for self-owned infrastructure testing, not
+  a high-performance commercial VPN service.
