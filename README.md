@@ -161,8 +161,14 @@ New-NetFirewallRule `
 Install the client:
 
 ```powershell
-git clone https://github.com/penghanli/pyvpn.git
-cd pyvpn
+if (Test-Path .\scripts\windows\install-client.ps1) {
+  git pull
+} else {
+  git clone https://github.com/penghanli/pyvpn.git
+  cd pyvpn
+}
+
+git log -1 --oneline
 
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\install-client.ps1 `
   -ServerHost <server-host> `
