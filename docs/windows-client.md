@@ -1,7 +1,8 @@
 # Windows Client
 
 The Windows client uses Wintun as the system TUN adapter. Run everything from an
-elevated PowerShell window.
+elevated PowerShell window opened with `Run as administrator`; Wintun adapter,
+route, and DNS changes require administrator access.
 
 ## Before Install
 

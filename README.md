@@ -34,8 +34,11 @@ and an outbound UDP socket; it does not listen for inbound VPN connections.
 
 ### Dependencies
 
-Server and Linux clients need root access, Python 3.9+, venv support, Git,
-Linux routing tools, and a usable TUN device. On Debian/Ubuntu:
+Server and Linux clients must run the installer and VPN commands as root,
+normally by using `sudo`. Root access is required because pyvpn creates TUN
+devices, changes routes, and manages DNS/NAT/systemd state. Linux also needs
+Python 3.9+, venv support, Git, routing tools, and a usable TUN device. On
+Debian/Ubuntu:
 
 ```bash
 sudo apt update
@@ -56,11 +59,13 @@ Check TUN support on Linux:
 ls -l /dev/net/tun || sudo modprobe tun
 ```
 
-Windows clients need an elevated PowerShell window, Git for Windows, Python
-3.9+ available through the `py` launcher or `PATH`, and outbound access to PyPI
-and `www.wintun.net`. The Windows installer creates the virtual environment,
-installs the Python package dependencies, downloads the official Wintun ZIP,
-verifies its SHA-256, and copies the matching `wintun.dll`.
+Windows clients must run from an elevated PowerShell window opened with
+`Run as administrator`. Administrator access is required because pyvpn creates a
+Wintun adapter and changes routes and DNS. Windows also needs Git for Windows,
+Python 3.9+ available through the `py` launcher or `PATH`, and outbound access
+to PyPI and `www.wintun.net`. The Windows installer creates the virtual
+environment, installs the Python package dependencies, downloads the official
+Wintun ZIP, verifies its SHA-256, and copies the matching `wintun.dll`.
 
 macOS CLI clients need Python 3.9+, `sudo`, and outbound access to PyPI unless
 you use a local wheelhouse.
@@ -68,6 +73,8 @@ you use a local wheelhouse.
 ## Server Setup
 
 ### Linux VPS
+
+Run the installer and management commands with `sudo` or as root.
 
 Open both ports in the VPS firewall and cloud security group first:
 
@@ -130,6 +137,8 @@ If a checkout already exists, run `git pull` inside it instead of cloning again.
 
 ### Linux Client
 
+Run the installer and `pyvpn-client-*` commands with `sudo` or as root.
+
 Install prerequisites on Debian/Ubuntu clients:
 
 ```bash
@@ -186,7 +195,9 @@ default.
 
 ### Windows Client
 
-Run everything from an elevated PowerShell window.
+Run everything from an elevated PowerShell window. In the Start menu,
+right-click PowerShell and choose `Run as administrator`; every command below
+assumes that administrator window.
 
 Step 1: allow the client to reach the server ports.
 

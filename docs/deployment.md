@@ -2,7 +2,9 @@
 
 ## Linux server: clone and run as a background service
 
-On the VPS:
+On the VPS, run the installer and server management commands with `sudo` or as
+root. Root access is required to create the TUN device, install NAT rules, and
+manage the systemd service:
 
 ```bash
 git clone <your-repo-url> pyvpn
@@ -45,7 +47,9 @@ Open the VPS firewall for TCP `8443` and UDP `8444`.
 
 ## Linux client: install once, run in the background
 
-On the Linux client machine:
+On the Linux client machine, run the installer and `pyvpn-client-*` commands
+with `sudo` or as root. Root access is required to create the TUN device, change
+routes, and update DNS while connected:
 
 ```bash
 git clone <your-repo-url> pyvpn
