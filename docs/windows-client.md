@@ -3,6 +3,58 @@
 The Windows client uses Wintun as the system TUN adapter. Run everything from an
 elevated PowerShell window.
 
+## Before Install
+
+Allow the client to reach the VPN server:
+
+```text
+Outbound TCP 8443 to <server-ip-or-domain>
+Outbound UDP 8444 to <server-ip-or-domain>
+```
+
+If Windows Defender Firewall is locked down with restrictive outbound rules,
+add explicit outbound allow rules. Use the server IPv4 address for
+`<server-ip>`:
+
+```powershell
+New-NetFirewallRule `
+  -DisplayName "pyvpn control TCP 8443 out" `
+  -Direction Outbound `
+  -Action Allow `
+  -Protocol TCP `
+  -RemoteAddress <server-ip> `
+  -RemotePort 8443
+
+New-NetFirewallRule `
+  -DisplayName "pyvpn tunnel UDP 8444 out" `
+  -Direction Outbound `
+  -Action Allow `
+  -Protocol UDP `
+  -RemoteAddress <server-ip> `
+  -RemotePort 8444
+```
+
+Install Git for Windows and Python 3.9+ first, then confirm both are available:
+
+```powershell
+git --version
+py -3 --version
+```
+
+The installer creates the virtual environment, installs the Python package
+dependencies, downloads the official Wintun ZIP, verifies its SHA-256, and
+copies the matching `wintun.dll`.
+
+Check the TCP control port before installing:
+
+```powershell
+Test-NetConnection <server-host> -Port 8443
+```
+
+This checks TCP `8443` only. If the client authenticates but tunnel traffic does
+not pass, check UDP `8444` on the VPS firewall/cloud security group and any
+Windows outbound firewall or security product.
+
 ## Install
 
 ```powershell

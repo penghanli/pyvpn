@@ -16,28 +16,26 @@ to the tunnel, and restore local networking when disconnected.
   pinning.
 - Default ports: TCP `8443` for control, UDP `8444` for tunnel data.
 
-## Prerequisites and Network Access
+## Required Network Access and Dependencies
 
-### Port direction
+### Ports
 
-Only the Linux server listens for inbound VPN traffic:
+`pyvpn` uses two ports:
 
 ```text
-Server inbound: TCP 8443, UDP 8444
-Client outbound: TCP 8443, UDP 8444 to the server
+TCP 8443: TLS control channel
+UDP 8444: encrypted tunnel packets
 ```
 
-Client machines, including Windows clients, normally do not need inbound
-firewall ports opened. They create outbound connections to the server. If the
-client is behind a corporate firewall, hotel network, campus network, or a
-strict local security product, allow outbound TCP `8443` and outbound UDP
-`8444` to the server public IP or DNS name.
+Open inbound TCP `8443` and UDP `8444` on the Linux VPS firewall and cloud
+security group. On client systems such as Windows, allow outbound TCP `8443`
+and UDP `8444` to the server. The client code opens an outbound TLS connection
+and an outbound UDP socket; it does not listen for inbound VPN connections.
 
-### Server prerequisites
+### Dependencies
 
-The server installer expects a Linux host with root access, Python 3.9+, venv
-support, Git, Linux routing tools, NAT tooling, and a usable TUN device. On
-Debian/Ubuntu, install the common packages first:
+Server and Linux clients need root access, Python 3.9+, venv support, Git,
+Linux routing tools, and a usable TUN device. On Debian/Ubuntu:
 
 ```bash
 sudo apt update
@@ -52,30 +50,20 @@ sudo apt install -y \
   python3-venv
 ```
 
-`nftables` is preferred for NAT. If your distribution uses iptables instead,
-install `iptables` and keep it available in `PATH`.
-
-Check TUN support:
+Check TUN support on Linux:
 
 ```bash
 ls -l /dev/net/tun || sudo modprobe tun
 ```
 
-On a normal VPS this should produce `/dev/net/tun`. In a container, the
-container must be started with `/dev/net/tun` and `NET_ADMIN` access.
+Windows clients need an elevated PowerShell window, Git for Windows, Python
+3.9+ available through the `py` launcher or `PATH`, and outbound access to PyPI
+and `www.wintun.net`. The Windows installer creates the virtual environment,
+installs the Python package dependencies, downloads the official Wintun ZIP,
+verifies its SHA-256, and copies the matching `wintun.dll`.
 
-### Client prerequisites
-
-All clients need administrator/root privileges because the VPN creates a TUN
-adapter, changes routes, and may change DNS while connected.
-
-- Linux client: Python 3.9+, `python3-venv`, Git, `iproute2`, and
-  `/dev/net/tun`.
-- Windows client: Windows 10/11, elevated PowerShell, Python 3.9+ in `PATH`
-  or available through the `py` launcher, Git, and internet access for PyPI and
-  the Wintun download. The installer downloads and verifies Wintun automatically.
-- macOS CLI client: Python 3.9+, `sudo`, and internet access for PyPI unless
-  you use a local wheelhouse.
+macOS CLI clients need Python 3.9+, `sudo`, and outbound access to PyPI unless
+you use a local wheelhouse.
 
 ## Server Setup
 
@@ -200,36 +188,56 @@ default.
 
 Run everything from an elevated PowerShell window.
 
-Before installing, confirm the required tools:
+Step 1: allow the client to reach the server ports.
+
+```text
+Outbound TCP 8443 to <server-ip-or-domain>
+Outbound UDP 8444 to <server-ip-or-domain>
+```
+
+If Windows Defender Firewall is locked down with restrictive outbound rules,
+add explicit outbound allow rules. Use the server IPv4 address for
+`<server-ip>`:
+
+```powershell
+New-NetFirewallRule `
+  -DisplayName "pyvpn control TCP 8443 out" `
+  -Direction Outbound `
+  -Action Allow `
+  -Protocol TCP `
+  -RemoteAddress <server-ip> `
+  -RemotePort 8443
+
+New-NetFirewallRule `
+  -DisplayName "pyvpn tunnel UDP 8444 out" `
+  -Direction Outbound `
+  -Action Allow `
+  -Protocol UDP `
+  -RemoteAddress <server-ip> `
+  -RemotePort 8444
+```
+
+Step 2: install and verify the local tools.
 
 ```powershell
 git --version
 py -3 --version
 ```
 
-If `py -3 --version` fails, install Python 3.9+ from python.org and enable
-`Add python.exe to PATH` during setup. If `git --version` fails, install Git for
-Windows and reopen the elevated PowerShell window.
+If either command fails, install Git for Windows and Python 3.9+ first, then
+open a new elevated PowerShell window.
 
-Windows clients do not need an inbound firewall rule for pyvpn. They must be
-able to make outbound connections to the server:
-
-```text
-Outbound TCP 8443 to <server-host>
-Outbound UDP 8444 to <server-host>
-```
-
-The TCP control port can be checked before installation:
+Step 3: verify the TCP control port before installing:
 
 ```powershell
 Test-NetConnection <server-host> -Port 8443
 ```
 
-`Test-NetConnection` checks the TCP control channel only. If TCP works but the
-client connects without passing traffic, check the server firewall/cloud
-security group and any client-side security product for UDP `8444`.
+`Test-NetConnection` only checks TCP `8443`. If login succeeds but traffic does
+not pass through the tunnel, check UDP `8444` on the VPS firewall/cloud security
+group and the Windows outbound firewall/security product.
 
-Install:
+Step 4: install the client:
 
 ```powershell
 git clone https://github.com/penghanli/pyvpn.git
