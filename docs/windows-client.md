@@ -61,7 +61,8 @@ The installer prints the exact helper script paths. New installs default to
 `C:\Program Files\pyvpn-client`; older or explicitly overridden installs may use
 `C:\Program Files (x86)\pyvpn-client`. Reinstalling with the current installer
 also updates helper scripts in the alternate Program Files path so old commands
-continue to forward to the current install.
+continue to forward to the current install. The simplest commands use the fixed
+launchers under `C:\ProgramData\pyvpn`.
 
 Helper scripts:
 
@@ -74,40 +75,26 @@ pyvpn-client-status.ps1
 
 ## Connect
 
-Set the helper path once in each new PowerShell window:
-
 ```powershell
-$ProgramFiles64 = [Environment]::GetEnvironmentVariable("ProgramW6432")
-if (-not $ProgramFiles64) { $ProgramFiles64 = $env:ProgramFiles }
-$ClientDir = Join-Path $ProgramFiles64 "pyvpn-client"
-if (-not (Test-Path (Join-Path $ClientDir "pyvpn-client-up.ps1"))) {
-  $ProgramFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
-  if ($ProgramFilesX86) { $ClientDir = Join-Path $ProgramFilesX86 "pyvpn-client" }
-}
-```
-
-Connect:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File (Join-Path $ClientDir "pyvpn-client-up.ps1")
+powershell -ExecutionPolicy Bypass -File "C:\ProgramData\pyvpn\pyvpn-client-up.ps1"
 ```
 
 Disconnect:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File (Join-Path $ClientDir "pyvpn-client-down.ps1")
+powershell -ExecutionPolicy Bypass -File "C:\ProgramData\pyvpn\pyvpn-client-down.ps1"
 ```
 
 Status:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File (Join-Path $ClientDir "pyvpn-client-status.ps1")
+powershell -ExecutionPolicy Bypass -File "C:\ProgramData\pyvpn\pyvpn-client-status.ps1"
 ```
 
 Foreground debug mode:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File (Join-Path $ClientDir "pyvpn-client-start.ps1")
+powershell -ExecutionPolicy Bypass -File "C:\ProgramData\pyvpn\pyvpn-client-start.ps1"
 ```
 
 In foreground mode, disconnect with `Ctrl-C`.

@@ -329,6 +329,9 @@ $scriptTargets = @{
     "pyvpn-client-down.ps1" = $downScript
     "pyvpn-client-status.ps1" = $statusScript
 }
+foreach ($scriptName in $scriptTargets.Keys) {
+    Write-ForwardingScript (Join-Path $ConfigDir $scriptName) $scriptTargets[$scriptName]
+}
 $installFull = [System.IO.Path]::GetFullPath($InstallDir).TrimEnd("\")
 foreach ($candidateDir in Get-StandardInstallDirs) {
     $candidateFull = [System.IO.Path]::GetFullPath($candidateDir).TrimEnd("\")
@@ -347,14 +350,14 @@ Write-Host "Install directory: $InstallDir"
 Write-Host "Wintun architecture: $arch"
 Write-Host ""
 Write-Host "Connect in the background from an elevated PowerShell window:"
-Write-Host "  powershell -ExecutionPolicy Bypass -File `"$upScript`""
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$ConfigDir\pyvpn-client-up.ps1`""
 Write-Host ""
 Write-Host "Disconnect:"
-Write-Host "  powershell -ExecutionPolicy Bypass -File `"$downScript`""
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$ConfigDir\pyvpn-client-down.ps1`""
 Write-Host ""
 Write-Host "Status:"
-Write-Host "  powershell -ExecutionPolicy Bypass -File `"$statusScript`""
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$ConfigDir\pyvpn-client-status.ps1`""
 Write-Host ""
 Write-Host "Foreground debug mode:"
-Write-Host "  powershell -ExecutionPolicy Bypass -File `"$startScript`""
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$ConfigDir\pyvpn-client-start.ps1`""
 Write-Host ""
