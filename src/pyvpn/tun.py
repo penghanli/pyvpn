@@ -132,7 +132,16 @@ class _WintunApi:
                 "or set PYVPN_WINTUN_DLL to the downloaded DLL path."
             )
 
-        self.dll = ctypes.WinDLL(str(dll_path), use_last_error=True)
+        try:
+            self.dll = ctypes.WinDLL(str(dll_path), use_last_error=True)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 193:
+                raise PlatformError(
+                    f"wintun.dll at {dll_path} does not match this Python architecture. "
+                    "Rerun scripts/windows/install-client.ps1 from an elevated PowerShell "
+                    "window so the installer can copy the correct Wintun DLL."
+                ) from exc
+            raise
         self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         self._configure_functions()
 

@@ -9,7 +9,7 @@ param(
     [string]$CertFingerprint,
 
     [int]$ControlPort = 8443,
-    [string]$InstallDir = "$env:ProgramFiles\pyvpn-client",
+    [string]$InstallDir = "",
     [string]$ConfigDir = "$env:ProgramData\pyvpn",
     [string]$TunName = "pyvpn0",
     [int]$Mtu = 1280,
@@ -43,18 +43,81 @@ function Resolve-Python {
     throw "Python 3.9+ is required. Install Python from python.org first."
 }
 
-function Get-WintunArch {
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString()
+function Resolve-DefaultInstallDir {
+    $root = [Environment]::GetEnvironmentVariable("ProgramW6432")
+    if ([string]::IsNullOrWhiteSpace($root)) {
+        $root = [Environment]::GetEnvironmentVariable("ProgramFiles")
+    }
+    if ([string]::IsNullOrWhiteSpace($root)) {
+        throw "Could not determine Program Files directory. Pass -InstallDir explicitly."
+    }
+    return Join-Path $root "pyvpn-client"
+}
+
+function Get-StandardInstallDirs {
+    $dirs = @()
+    foreach ($root in @(
+        [Environment]::GetEnvironmentVariable("ProgramW6432"),
+        [Environment]::GetEnvironmentVariable("ProgramFiles"),
+        [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+    )) {
+        if ([string]::IsNullOrWhiteSpace($root)) {
+            continue
+        }
+        $dir = Join-Path $root "pyvpn-client"
+        if ($dirs -notcontains $dir) {
+            $dirs += $dir
+        }
+    }
+    return $dirs
+}
+
+function Get-PythonWintunArch([string]$PythonExe) {
+    $archScript = @'
+import platform
+import struct
+
+machine = (platform.machine() or "").lower()
+bits = struct.calcsize("P") * 8
+
+if bits == 64 and machine in {"amd64", "x86_64"}:
+    print("amd64")
+elif bits == 32 and machine in {"x86", "i386", "i686", "amd64", "x86_64"}:
+    print("x86")
+elif bits == 64 and machine in {"arm64", "aarch64"}:
+    print("arm64")
+elif bits == 32 and machine.startswith("arm"):
+    print("arm")
+else:
+    raise SystemExit(f"unsupported Python architecture: machine={machine}, bits={bits}")
+'@
+    $output = & $PythonExe -c $archScript 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not determine Wintun architecture from Python: $output"
+    }
+    $arch = (($output | Select-Object -Last 1).ToString()).Trim()
     switch ($arch) {
-        "X64" { return "amd64" }
-        "X86" { return "x86" }
-        "Arm64" { return "arm64" }
-        "Arm" { return "arm" }
-        default { throw "Unsupported Windows architecture: $arch" }
+        "amd64" { return "amd64" }
+        "x86" { return "x86" }
+        "arm64" { return "arm64" }
+        "arm" { return "arm" }
+        default { throw "Unsupported Python Wintun architecture: $arch" }
     }
 }
 
+function Write-ForwardingScript([string]$Path, [string]$TargetScript) {
+@"
+`$ErrorActionPreference = "Stop"
+& $(Quote-PowerShellString $TargetScript) @args
+exit `$LASTEXITCODE
+"@ | Set-Content -Encoding UTF8 -Path $Path
+}
+
 Assert-Admin
+
+if ([string]::IsNullOrWhiteSpace($InstallDir)) {
+    $InstallDir = Resolve-DefaultInstallDir
+}
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (Resolve-Path (Join-Path $scriptDir "..\..")).Path
@@ -63,6 +126,8 @@ if (-not (Test-Path (Join-Path $repoRoot "pyproject.toml"))) {
 }
 
 New-Item -ItemType Directory -Force -Path $InstallDir, $ConfigDir | Out-Null
+$InstallDir = (Resolve-Path $InstallDir).Path
+$ConfigDir = (Resolve-Path $ConfigDir).Path
 
 $pythonCmd = @(Resolve-Python)
 $pythonExe = $pythonCmd[0]
@@ -81,27 +146,33 @@ $wintunZip = Join-Path $ConfigDir "wintun-0.14.1.zip"
 $wintunExtract = Join-Path $ConfigDir "wintun"
 $wintunDllTarget = Join-Path $InstallDir "venv\Scripts\wintun.dll"
 
-if (-not (Test-Path $wintunDllTarget)) {
+if (-not (Test-Path $wintunZip)) {
+    Invoke-WebRequest -Uri $wintunUrl -OutFile $wintunZip
+}
+
+$actualHash = (Get-FileHash -Path $wintunZip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualHash -ne $wintunSha256) {
+    Remove-Item -Force $wintunZip -ErrorAction SilentlyContinue
     Invoke-WebRequest -Uri $wintunUrl -OutFile $wintunZip
     $actualHash = (Get-FileHash -Path $wintunZip -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualHash -ne $wintunSha256) {
         throw "Wintun SHA-256 mismatch. Expected $wintunSha256, got $actualHash"
     }
-
-    if (Test-Path $wintunExtract) {
-        Remove-Item -Recurse -Force $wintunExtract
-    }
-    Expand-Archive -Path $wintunZip -DestinationPath $wintunExtract -Force
-
-    $arch = Get-WintunArch
-    $candidate = Get-ChildItem -Path $wintunExtract -Recurse -Filter wintun.dll |
-        Where-Object { $_.FullName -match "\\bin\\$arch\\wintun\.dll$" } |
-        Select-Object -First 1
-    if (-not $candidate) {
-        throw "Could not find Wintun DLL for architecture '$arch' in $wintunZip"
-    }
-    Copy-Item -Force $candidate.FullName $wintunDllTarget
 }
+
+if (Test-Path $wintunExtract) {
+    Remove-Item -Recurse -Force $wintunExtract
+}
+Expand-Archive -Path $wintunZip -DestinationPath $wintunExtract -Force
+
+$arch = Get-PythonWintunArch $venvPython
+$candidate = Get-ChildItem -Path $wintunExtract -Recurse -Filter wintun.dll |
+    Where-Object { $_.FullName -match "\\bin\\$arch\\wintun\.dll$" } |
+    Select-Object -First 1
+if (-not $candidate) {
+    throw "Could not find Wintun DLL for Python architecture '$arch' in $wintunZip"
+}
+Copy-Item -Force $candidate.FullName $wintunDllTarget
 
 $envPath = Join-Path $ConfigDir "client.env.ps1"
 $pidPath = Join-Path $ConfigDir "client.pid"
@@ -269,8 +340,28 @@ if (Test-Path `$errLogPath) {
 }
 "@ | Set-Content -Encoding UTF8 -Path $statusScript
 
+$scriptTargets = @{
+    "pyvpn-client-start.ps1" = $startScript
+    "pyvpn-client-up.ps1" = $upScript
+    "pyvpn-client-down.ps1" = $downScript
+    "pyvpn-client-status.ps1" = $statusScript
+}
+$installFull = [System.IO.Path]::GetFullPath($InstallDir).TrimEnd("\")
+foreach ($candidateDir in Get-StandardInstallDirs) {
+    $candidateFull = [System.IO.Path]::GetFullPath($candidateDir).TrimEnd("\")
+    if ($candidateFull -eq $installFull) {
+        continue
+    }
+    New-Item -ItemType Directory -Force -Path $candidateDir | Out-Null
+    foreach ($scriptName in $scriptTargets.Keys) {
+        Write-ForwardingScript (Join-Path $candidateDir $scriptName) $scriptTargets[$scriptName]
+    }
+}
+
 Write-Host ""
 Write-Host "pyvpn Windows client installed."
+Write-Host "Install directory: $InstallDir"
+Write-Host "Wintun architecture: $arch"
 Write-Host ""
 Write-Host "Connect in the background from an elevated PowerShell window:"
 Write-Host "  powershell -ExecutionPolicy Bypass -File `"$upScript`""

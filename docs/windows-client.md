@@ -48,37 +48,57 @@ powershell -ExecutionPolicy Bypass -File scripts\windows\install-client.ps1 `
   -CertFingerprint 'sha256:<server-fingerprint>'
 ```
 
-The installer creates:
+The installer prints the exact helper script paths. New installs default to
+`C:\Program Files\pyvpn-client`; older or explicitly overridden installs may use
+`C:\Program Files (x86)\pyvpn-client`. Reinstalling with the current installer
+also updates helper scripts in the alternate Program Files path so old commands
+continue to forward to the current install.
+
+Helper scripts:
 
 ```text
-C:\Program Files\pyvpn-client\pyvpn-client-start.ps1
-C:\Program Files\pyvpn-client\pyvpn-client-up.ps1
-C:\Program Files\pyvpn-client\pyvpn-client-down.ps1
-C:\Program Files\pyvpn-client\pyvpn-client-status.ps1
+pyvpn-client-start.ps1
+pyvpn-client-up.ps1
+pyvpn-client-down.ps1
+pyvpn-client-status.ps1
 ```
 
 ## Connect
 
+Set the helper path once in each new PowerShell window:
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-up.ps1"
+$ProgramFiles64 = [Environment]::GetEnvironmentVariable("ProgramW6432")
+if (-not $ProgramFiles64) { $ProgramFiles64 = $env:ProgramFiles }
+$ClientDir = Join-Path $ProgramFiles64 "pyvpn-client"
+if (-not (Test-Path (Join-Path $ClientDir "pyvpn-client-up.ps1"))) {
+  $ProgramFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+  if ($ProgramFilesX86) { $ClientDir = Join-Path $ProgramFilesX86 "pyvpn-client" }
+}
+```
+
+Connect:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File (Join-Path $ClientDir "pyvpn-client-up.ps1")
 ```
 
 Disconnect:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-down.ps1"
+powershell -ExecutionPolicy Bypass -File (Join-Path $ClientDir "pyvpn-client-down.ps1")
 ```
 
 Status:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-status.ps1"
+powershell -ExecutionPolicy Bypass -File (Join-Path $ClientDir "pyvpn-client-status.ps1")
 ```
 
 Foreground debug mode:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-start.ps1"
+powershell -ExecutionPolicy Bypass -File (Join-Path $ClientDir "pyvpn-client-start.ps1")
 ```
 
 In foreground mode, disconnect with `Ctrl-C`.
@@ -97,3 +117,7 @@ curl.exe -4 https://ifconfig.me
 `Test-NetConnection` checks TCP `8443` only. If the client authenticates but
 tunnel traffic does not pass, check UDP `8444` on the VPS firewall/cloud
 security group and any Windows outbound firewall or security product.
+
+If Windows reports `WinError 193` or says `wintun.dll` does not match the Python
+architecture, pull the latest code and rerun `scripts\windows\install-client.ps1`.
+The installer will replace the wrong-architecture Wintun DLL.

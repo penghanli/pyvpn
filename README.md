@@ -171,14 +171,26 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\install-client.ps1 `
 ```
 
 The installer downloads and verifies Wintun, creates a virtual environment, and
-writes helper scripts under `C:\Program Files\pyvpn-client`.
+prints the exact helper script paths. New installs default to
+`C:\Program Files\pyvpn-client`; older or explicitly overridden installs may use
+`C:\Program Files (x86)\pyvpn-client`. Reinstalling with the current installer
+also updates helper scripts in the alternate Program Files path so old commands
+continue to forward to the current install.
 
 Connect and disconnect:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-up.ps1"
-powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-down.ps1"
-powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-status.ps1"
+$ProgramFiles64 = [Environment]::GetEnvironmentVariable("ProgramW6432")
+if (-not $ProgramFiles64) { $ProgramFiles64 = $env:ProgramFiles }
+$ClientDir = Join-Path $ProgramFiles64 "pyvpn-client"
+if (-not (Test-Path (Join-Path $ClientDir "pyvpn-client-up.ps1"))) {
+  $ProgramFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+  if ($ProgramFilesX86) { $ClientDir = Join-Path $ProgramFilesX86 "pyvpn-client" }
+}
+
+powershell -ExecutionPolicy Bypass -File (Join-Path $ClientDir "pyvpn-client-up.ps1")
+powershell -ExecutionPolicy Bypass -File (Join-Path $ClientDir "pyvpn-client-down.ps1")
+powershell -ExecutionPolicy Bypass -File (Join-Path $ClientDir "pyvpn-client-status.ps1")
 ```
 
 ### macOS Client
@@ -240,6 +252,10 @@ curl.exe -4 https://ifconfig.me
 If TCP `8443` works but the client connects without passing traffic, check UDP
 `8444` on the VPS firewall/cloud security group and the client outbound
 firewall.
+
+If Windows reports `WinError 193` or says `wintun.dll` does not match the Python
+architecture, pull the latest code and rerun `scripts\windows\install-client.ps1`.
+The installer will replace the wrong-architecture Wintun DLL.
 
 ## Development Install
 

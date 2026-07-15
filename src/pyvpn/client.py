@@ -163,7 +163,10 @@ class VpnClient:
             except Exception:  # noqa: BLE001
                 pass
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            except (ConnectionError, OSError, ssl.SSLError):
+                pass
             await self.cleanup()
 
     def _install_signal_handlers(self) -> None:
