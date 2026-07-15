@@ -76,11 +76,10 @@ Disconnect:
 sudo pyvpn-client-down
 ```
 
-Status and logs:
+Status:
 
 ```bash
 sudo pyvpn-client-status
-sudo tail -f /var/log/pyvpn/client.log /var/log/pyvpn/client.err.log
 ```
 
 Foreground debug mode:
@@ -91,18 +90,20 @@ sudo pyvpn-client-start
 
 In foreground mode, disconnect with `Ctrl-C`.
 
-## Verify
+## If Something Does Not Work
+
+Run these checks only when installation or traffic fails:
 
 ```bash
 curl -4 https://ifconfig.me
 route -n get default
 netstat -rn -f inet | grep -E '^(default|0/1|128\\.0/1|51\\.79\\.147\\.199)'
+sudo tail -n 80 /var/log/pyvpn/client.log /var/log/pyvpn/client.err.log
 scutil --dns | grep -A2 nameserver
 ```
 
-The IPv4 curl result should be the server public IP. The route table should show
-split default routes through the tunnel and a host route that keeps the VPN
-server itself outside the tunnel.
+The IPv4 curl result should be the server public IP. If it is not, check the
+route table and client logs above.
 
 ## Notes
 

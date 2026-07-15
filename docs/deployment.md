@@ -6,6 +6,23 @@ On the VPS, run the installer and server management commands with `sudo` or as
 root. Root access is required to create the TUN device, install NAT rules, and
 manage the systemd service:
 
+Open TCP `8443` and UDP `8444` on the VPS firewall and cloud security group.
+Use the block that matches your Linux firewall:
+
+```bash
+# UFW
+sudo ufw allow 8443/tcp
+sudo ufw allow 8444/udp
+sudo ufw reload
+```
+
+```bash
+# firewalld
+sudo firewall-cmd --permanent --add-port=8443/tcp
+sudo firewall-cmd --permanent --add-port=8444/udp
+sudo firewall-cmd --reload
+```
+
 ```bash
 git clone <your-repo-url> pyvpn
 cd pyvpn
@@ -40,11 +57,6 @@ sudo pyvpn-server-restart
 sudo systemctl stop pyvpn-server
 ```
 
-`pyvpn-server-restart` prints a success message and the current systemd status
-after the restart completes.
-
-Open the VPS firewall for TCP `8443` and UDP `8444`.
-
 ## Linux client: install once, run in the background
 
 On the Linux client machine, run the installer and `pyvpn-client-*` commands
@@ -72,15 +84,11 @@ Disconnect:
 sudo pyvpn-client-down
 ```
 
-Check status and logs:
+Status:
 
 ```bash
 sudo pyvpn-client-status
-sudo journalctl -u pyvpn-client -f
 ```
-
-For foreground debugging, use `sudo pyvpn-client-start` and disconnect with
-`Ctrl-C`.
 
 When testing on a remote VPS over SSH, the client installer records the current
 SSH source IP and keeps that IP outside the VPN. You can add more protected
@@ -88,11 +96,10 @@ management IPs with repeated `--bypass-ip <ip>` arguments.
 The client also adds a temporary policy route for the VPS public source IP, so
 new inbound SSH connections can still return through the original gateway.
 
-For remote foreground tests, run the client with a timeout first so a bad route
-cannot keep the VPS unreachable:
+If the Linux client fails, check logs:
 
 ```bash
-sudo timeout 60 pyvpn-client-start
+sudo journalctl -u pyvpn-client -n 80 --no-pager
 ```
 
 ## Windows and macOS clients
@@ -105,6 +112,6 @@ The protocol code is shared, but platform packaging differs:
   `macos/` NetworkExtension target in Xcode and connect its packet flow to the
   shared pyvpn protocol.
 
-Linux remains the most tested path. Windows is experimental and should be
-verified with IPv4-only tests first. macOS CLI support is also experimental and
-should be tested on a non-critical network profile first.
+Linux remains the most tested path. Windows and macOS CLI support are
+experimental, so use the troubleshooting commands in their client docs if
+traffic does not pass after connecting.

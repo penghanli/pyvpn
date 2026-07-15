@@ -16,74 +16,57 @@ to the tunnel, and restore local networking when disconnected.
   pinning.
 - Default ports: TCP `8443` for control, UDP `8444` for tunnel data.
 
-## Required Network Access and Dependencies
+## Requirements
 
-### Ports
-
-`pyvpn` uses two ports:
+Ports:
 
 ```text
-TCP 8443: TLS control channel
-UDP 8444: encrypted tunnel packets
+Server inbound: TCP 8443, UDP 8444
+Client outbound: TCP 8443, UDP 8444 to the server
 ```
 
-Open inbound TCP `8443` and UDP `8444` on the Linux VPS firewall and cloud
-security group. On client systems such as Windows, allow outbound TCP `8443`
-and UDP `8444` to the server. The client code opens an outbound TLS connection
-and an outbound UDP socket; it does not listen for inbound VPN connections.
+Linux server and Linux clients must run install/connect commands with `sudo` or
+as root. Windows clients must run from PowerShell opened with
+`Run as administrator`.
 
-### Dependencies
-
-Server and Linux clients must run the installer and VPN commands as root,
-normally by using `sudo`. Root access is required because pyvpn creates TUN
-devices, changes routes, and manages DNS/NAT/systemd state. Linux also needs
-Python 3.9+, venv support, Git, routing tools, and a usable TUN device. On
-Debian/Ubuntu:
+Linux dependencies:
 
 ```bash
 sudo apt update
-sudo apt install -y \
-  ca-certificates \
-  curl \
-  git \
-  iproute2 \
-  nftables \
-  python3 \
-  python3-pip \
-  python3-venv
+sudo apt install -y ca-certificates curl git iproute2 nftables python3 python3-pip python3-venv
 ```
 
-Check TUN support on Linux:
+Windows dependencies:
 
-```bash
-ls -l /dev/net/tun || sudo modprobe tun
-```
+- Git for Windows
+- Python 3.9+ through the `py` launcher or `PATH`
+- outbound access to PyPI and `www.wintun.net`
 
-Windows clients must run from an elevated PowerShell window opened with
-`Run as administrator`. Administrator access is required because pyvpn creates a
-Wintun adapter and changes routes and DNS. Windows also needs Git for Windows,
-Python 3.9+ available through the `py` launcher or `PATH`, and outbound access
-to PyPI and `www.wintun.net`. The Windows installer creates the virtual
-environment, installs the Python package dependencies, downloads the official
-Wintun ZIP, verifies its SHA-256, and copies the matching `wintun.dll`.
-
-macOS CLI clients need Python 3.9+, `sudo`, and outbound access to PyPI unless
-you use a local wheelhouse.
+The Windows installer handles the virtualenv, Python package dependencies, and
+Wintun download.
 
 ## Server Setup
 
 ### Linux VPS
 
-Run the installer and management commands with `sudo` or as root.
+Open TCP `8443` and UDP `8444` on the VPS firewall and cloud security group.
+Use the command block that matches your Linux firewall:
 
-Open both ports in the VPS firewall and cloud security group first:
-
-```text
-TCP 8443
-UDP 8444
+```bash
+# UFW
+sudo ufw allow 8443/tcp
+sudo ufw allow 8444/udp
+sudo ufw reload
 ```
 
-Then clone and install the server:
+```bash
+# firewalld
+sudo firewall-cmd --permanent --add-port=8443/tcp
+sudo firewall-cmd --permanent --add-port=8444/udp
+sudo firewall-cmd --reload
+```
+
+Install the server:
 
 ```bash
 git clone https://github.com/penghanli/pyvpn.git
@@ -106,7 +89,7 @@ Client settings:
   cert fingerprint: sha256:<server-fingerprint>
 ```
 
-Server management:
+Server commands:
 
 ```bash
 sudo pyvpn-server-status
@@ -115,41 +98,20 @@ sudo pyvpn-server-restart
 sudo systemctl stop pyvpn-server
 ```
 
-Check that the server is listening:
-
-```bash
-sudo ss -lntup | grep -E '8443|8444'
-```
-
-Expected listeners:
-
-```text
-0.0.0.0:8443/tcp
-0.0.0.0:8444/udp
-```
-
 ## Client Setup
 
-Use the `server host`, `token`, and `cert fingerprint` printed by the Linux
-server installer.
-
-If a checkout already exists, run `git pull` inside it instead of cloning again.
+Use the `server host`, `token`, and `cert fingerprint` printed by the server
+installer. If a checkout already exists, run `git pull` inside it instead of
+cloning again.
 
 ### Linux Client
 
-Run the installer and `pyvpn-client-*` commands with `sudo` or as root.
-
-Install prerequisites on Debian/Ubuntu clients:
+Run these commands with `sudo` where shown:
 
 ```bash
 sudo apt update
 sudo apt install -y ca-certificates git iproute2 python3 python3-pip python3-venv
-ls -l /dev/net/tun || sudo modprobe tun
-```
 
-Install:
-
-```bash
 git clone https://github.com/penghanli/pyvpn.git
 cd pyvpn
 
@@ -159,34 +121,13 @@ sudo scripts/linux/install-client.sh \
   --cert-fingerprint 'sha256:<server-fingerprint>'
 ```
 
-Connect:
+Connect and disconnect:
 
 ```bash
 sudo pyvpn-client-up
-```
-
-Disconnect:
-
-```bash
 sudo pyvpn-client-down
-```
-
-Status and logs:
-
-```bash
 sudo pyvpn-client-status
-journalctl -u pyvpn-client -n 80 --no-pager
 ```
-
-Verify:
-
-```bash
-curl -4 https://ifconfig.me
-ip route get 1.1.1.1
-ip route
-```
-
-The IPv4 curl result should be the server public IP.
 
 When installing over SSH, the Linux installer preserves the current SSH source
 IP outside the VPN so the management connection can still return through the
@@ -195,20 +136,9 @@ default.
 
 ### Windows Client
 
-Run everything from an elevated PowerShell window. In the Start menu,
-right-click PowerShell and choose `Run as administrator`; every command below
-assumes that administrator window.
+Open PowerShell with `Run as administrator`.
 
-Step 1: allow the client to reach the server ports.
-
-```text
-Outbound TCP 8443 to <server-ip-or-domain>
-Outbound UDP 8444 to <server-ip-or-domain>
-```
-
-If Windows Defender Firewall is locked down with restrictive outbound rules,
-add explicit outbound allow rules. Use the server IPv4 address for
-`<server-ip>`:
+If outbound firewall rules are restricted, allow the client to reach the server:
 
 ```powershell
 New-NetFirewallRule `
@@ -228,27 +158,7 @@ New-NetFirewallRule `
   -RemotePort 8444
 ```
 
-Step 2: install and verify the local tools.
-
-```powershell
-git --version
-py -3 --version
-```
-
-If either command fails, install Git for Windows and Python 3.9+ first, then
-open a new elevated PowerShell window.
-
-Step 3: verify the TCP control port before installing:
-
-```powershell
-Test-NetConnection <server-host> -Port 8443
-```
-
-`Test-NetConnection` only checks TCP `8443`. If login succeeds but traffic does
-not pass through the tunnel, check UDP `8444` on the VPS firewall/cloud security
-group and the Windows outbound firewall/security product.
-
-Step 4: install the client:
+Install the client:
 
 ```powershell
 git clone https://github.com/penghanli/pyvpn.git
@@ -263,56 +173,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\install-client.ps1 `
 The installer downloads and verifies Wintun, creates a virtual environment, and
 writes helper scripts under `C:\Program Files\pyvpn-client`.
 
-Connect:
+Connect and disconnect:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-up.ps1"
-```
-
-Disconnect:
-
-```powershell
 powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-down.ps1"
-```
-
-Status and logs:
-
-```powershell
 powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-status.ps1"
-Get-Content "C:\ProgramData\pyvpn\client.log" -Tail 80
-Get-Content "C:\ProgramData\pyvpn\client.err.log" -Tail 80
-```
-
-Verify:
-
-```powershell
-Test-NetConnection <server-host> -Port 8443
-
-curl.exe -4 https://ifconfig.me
-echo ""
-
-Get-NetRoute -AddressFamily IPv4 |
-  Where-Object {
-    $_.DestinationPrefix -in @(
-      "0.0.0.0/1",
-      "128.0.0.0/1",
-      "<server-ip>/32",
-      "0.0.0.0/0"
-    )
-  } |
-  Sort-Object DestinationPrefix, RouteMetric |
-  Format-Table DestinationPrefix, NextHop, InterfaceAlias, RouteMetric -AutoSize
-
-tracert -4 1.1.1.1
-```
-
-The IPv4 curl result should be the server public IP, and the first traceroute
-hop should be `10.8.0.1`.
-
-Foreground debug mode:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-start.ps1"
 ```
 
 ### macOS Client
@@ -321,15 +187,9 @@ The macOS CLI client is experimental. It uses the native `utun` kernel control
 from Python and must run with `sudo`. A production macOS app should use the
 signed NetworkExtension path under `macos/`.
 
-Install Python 3.9+ first if `python3` is missing:
-
 ```bash
 brew install python
-```
 
-Install:
-
-```bash
 git clone https://github.com/penghanli/pyvpn.git
 cd pyvpn
 
@@ -340,74 +200,46 @@ sudo scripts/macos/install-client.sh \
   --tun auto
 ```
 
-If PyPI is slow or blocked, use a mirror:
-
-```bash
-sudo scripts/macos/install-client.sh \
-  --server-host <server-host> \
-  --token '<shared-token>' \
-  --cert-fingerprint 'sha256:<server-fingerprint>' \
-  --pip-index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-  --tun auto
-```
-
-For offline or repeatable installs, build a local wheelhouse on the target Mac:
-
-```bash
-rm -rf wheelhouse
-mkdir -p wheelhouse
-
-python3 -m pip download \
-  --only-binary=:all: \
-  -d wheelhouse \
-  -i https://pypi.tuna.tsinghua.edu.cn/simple \
-  'cryptography>=42.0.0'
-
-sudo scripts/macos/install-client.sh \
-  --server-host <server-host> \
-  --token '<shared-token>' \
-  --cert-fingerprint 'sha256:<server-fingerprint>' \
-  --wheel-dir ./wheelhouse \
-  --tun auto
-```
-
-Connect:
+Connect and disconnect:
 
 ```bash
 sudo pyvpn-client-up
-```
-
-Disconnect:
-
-```bash
 sudo pyvpn-client-down
-```
-
-Status and logs:
-
-```bash
 sudo pyvpn-client-status
-sudo tail -f /var/log/pyvpn/client.log /var/log/pyvpn/client.err.log
 ```
 
-Verify:
+## If Something Does Not Work
+
+Run these checks only when installation or traffic fails.
+
+Server:
 
 ```bash
+sudo ss -lntup | grep -E '8443|8444'
+sudo pyvpn-server-status
+sudo pyvpn-server-logs
+```
+
+Linux client:
+
+```bash
+ls -l /dev/net/tun || sudo modprobe tun
+journalctl -u pyvpn-client -n 80 --no-pager
 curl -4 https://ifconfig.me
-echo
-
-route -n get 1.1.1.1
-netstat -rn -f inet | grep -E '(^default|^0/1|^128\.0/1|10\.8\.)'
 ```
 
-The IPv4 curl result should be the server public IP, and `route -n get 1.1.1.1`
-should show a `utun` interface.
+Windows client:
 
-Foreground debug mode:
-
-```bash
-sudo pyvpn-client-start
+```powershell
+Test-NetConnection <server-host> -Port 8443
+Get-Content "C:\ProgramData\pyvpn\client.log" -Tail 80
+Get-Content "C:\ProgramData\pyvpn\client.err.log" -Tail 80
+curl.exe -4 https://ifconfig.me
 ```
+
+If TCP `8443` works but the client connects without passing traffic, check UDP
+`8444` on the VPS firewall/cloud security group and the client outbound
+firewall.
 
 ## Development Install
 

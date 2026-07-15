@@ -1,21 +1,18 @@
 # Windows Client
 
-The Windows client uses Wintun as the system TUN adapter. Run everything from an
-elevated PowerShell window opened with `Run as administrator`; Wintun adapter,
-route, and DNS changes require administrator access.
+The Windows client uses Wintun as the system TUN adapter. Open PowerShell with
+`Run as administrator`; Wintun adapter, route, and DNS changes require
+administrator access.
 
 ## Before Install
 
-Allow the client to reach the VPN server:
+Install:
 
-```text
-Outbound TCP 8443 to <server-ip-or-domain>
-Outbound UDP 8444 to <server-ip-or-domain>
-```
+- Git for Windows
+- Python 3.9+ through the `py` launcher or `PATH`
 
-If Windows Defender Firewall is locked down with restrictive outbound rules,
-add explicit outbound allow rules. Use the server IPv4 address for
-`<server-ip>`:
+If outbound firewall rules are restricted, allow the client to reach the VPN
+server:
 
 ```powershell
 New-NetFirewallRule `
@@ -35,26 +32,9 @@ New-NetFirewallRule `
   -RemotePort 8444
 ```
 
-Install Git for Windows and Python 3.9+ first, then confirm both are available:
-
-```powershell
-git --version
-py -3 --version
-```
-
 The installer creates the virtual environment, installs the Python package
 dependencies, downloads the official Wintun ZIP, verifies its SHA-256, and
 copies the matching `wintun.dll`.
-
-Check the TCP control port before installing:
-
-```powershell
-Test-NetConnection <server-host> -Port 8443
-```
-
-This checks TCP `8443` only. If the client authenticates but tunnel traffic does
-not pass, check UDP `8444` on the VPS firewall/cloud security group and any
-Windows outbound firewall or security product.
 
 ## Install
 
@@ -63,13 +43,12 @@ git clone https://github.com/penghanli/pyvpn.git
 cd pyvpn
 
 powershell -ExecutionPolicy Bypass -File scripts\windows\install-client.ps1 `
-  -ServerHost 51.79.147.199 `
+  -ServerHost <server-host> `
   -Token '<token-from-server>' `
   -CertFingerprint 'sha256:<server-fingerprint>'
 ```
 
-The installer downloads the official Wintun 0.14.1 ZIP, verifies its SHA-256,
-copies the matching `wintun.dll` into the virtualenv, and creates:
+The installer creates:
 
 ```text
 C:\Program Files\pyvpn-client\pyvpn-client-start.ps1
@@ -90,16 +69,10 @@ Disconnect:
 powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-down.ps1"
 ```
 
-The down script requests graceful shutdown first so the client can notify the
-server and restore routes. If the process does not exit after a few seconds, it
-falls back to force stop and route cleanup.
-
-Status and logs:
+Status:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-client-status.ps1"
-Get-Content "C:\ProgramData\pyvpn\client.log" -Tail 80
-Get-Content "C:\ProgramData\pyvpn\client.err.log" -Tail 80
 ```
 
 Foreground debug mode:
@@ -110,12 +83,17 @@ powershell -ExecutionPolicy Bypass -File "C:\Program Files\pyvpn-client\pyvpn-cl
 
 In foreground mode, disconnect with `Ctrl-C`.
 
-## Verify
+## If Something Does Not Work
+
+Run these checks only when installation or traffic fails:
 
 ```powershell
+Test-NetConnection <server-host> -Port 8443
+Get-Content "C:\ProgramData\pyvpn\client.log" -Tail 80
+Get-Content "C:\ProgramData\pyvpn\client.err.log" -Tail 80
 curl.exe -4 https://ifconfig.me
-route print -4
-Get-NetRoute -DestinationPrefix 0.0.0.0/1,128.0.0.0/1
 ```
 
-The IPv4 curl result should be the server public IP.
+`Test-NetConnection` checks TCP `8443` only. If the client authenticates but
+tunnel traffic does not pass, check UDP `8444` on the VPS firewall/cloud
+security group and any Windows outbound firewall or security product.
