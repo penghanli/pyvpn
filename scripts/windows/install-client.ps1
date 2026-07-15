@@ -73,24 +73,7 @@ function Get-StandardInstallDirs {
 }
 
 function Get-PythonWintunArch([string]$PythonExe) {
-    $archScript = @'
-import platform
-import struct
-
-machine = (platform.machine() or "").lower()
-bits = struct.calcsize("P") * 8
-
-if bits == 64 and machine in {"amd64", "x86_64"}:
-    print("amd64")
-elif bits == 32 and machine in {"x86", "i386", "i686", "amd64", "x86_64"}:
-    print("x86")
-elif bits == 64 and machine in {"arm64", "aarch64"}:
-    print("arm64")
-elif bits == 32 and machine.startswith("arm"):
-    print("arm")
-else:
-    raise SystemExit(f"unsupported Python architecture: machine={machine}, bits={bits}")
-'@
+    $archScript = "import platform,struct; m=(platform.machine() or '').lower(); b=struct.calcsize('P')*8; print('arm64' if b==64 and m in ('arm64','aarch64') else 'arm' if b==32 and m.startswith('arm') else 'amd64' if b==64 else 'x86' if b==32 else 'unsupported')"
     $output = & $PythonExe -c $archScript 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Could not determine Wintun architecture from Python: $output"
