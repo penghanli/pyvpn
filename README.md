@@ -16,6 +16,67 @@ to the tunnel, and restore local networking when disconnected.
   pinning.
 - Default ports: TCP `8443` for control, UDP `8444` for tunnel data.
 
+## Prerequisites and Network Access
+
+### Port direction
+
+Only the Linux server listens for inbound VPN traffic:
+
+```text
+Server inbound: TCP 8443, UDP 8444
+Client outbound: TCP 8443, UDP 8444 to the server
+```
+
+Client machines, including Windows clients, normally do not need inbound
+firewall ports opened. They create outbound connections to the server. If the
+client is behind a corporate firewall, hotel network, campus network, or a
+strict local security product, allow outbound TCP `8443` and outbound UDP
+`8444` to the server public IP or DNS name.
+
+### Server prerequisites
+
+The server installer expects a Linux host with root access, Python 3.9+, venv
+support, Git, Linux routing tools, NAT tooling, and a usable TUN device. On
+Debian/Ubuntu, install the common packages first:
+
+```bash
+sudo apt update
+sudo apt install -y \
+  ca-certificates \
+  curl \
+  git \
+  iproute2 \
+  nftables \
+  python3 \
+  python3-pip \
+  python3-venv
+```
+
+`nftables` is preferred for NAT. If your distribution uses iptables instead,
+install `iptables` and keep it available in `PATH`.
+
+Check TUN support:
+
+```bash
+ls -l /dev/net/tun || sudo modprobe tun
+```
+
+On a normal VPS this should produce `/dev/net/tun`. In a container, the
+container must be started with `/dev/net/tun` and `NET_ADMIN` access.
+
+### Client prerequisites
+
+All clients need administrator/root privileges because the VPN creates a TUN
+adapter, changes routes, and may change DNS while connected.
+
+- Linux client: Python 3.9+, `python3-venv`, Git, `iproute2`, and
+  `/dev/net/tun`.
+- Windows client: Windows 10/11, elevated PowerShell, Python 3.9+ in `PATH`
+  or available through the `py` launcher, Git, and internet access for PyPI and
+  the Wintun download. The installer downloads and verifies Wintun automatically.
+- macOS CLI client: Python 3.9+, `sudo`, and internet access for PyPI unless
+  you use a local wheelhouse.
+
 ## Server Setup
 
 ### Linux VPS
@@ -81,6 +142,14 @@ If a checkout already exists, run `git pull` inside it instead of cloning again.
 
 ### Linux Client
 
+Install prerequisites on Debian/Ubuntu clients:
+
+```bash
+sudo apt update
+sudo apt install -y ca-certificates git iproute2 python3 python3-pip python3-venv
+ls -l /dev/net/tun || sudo modprobe tun
+```
+
 Install:
 
 ```bash
@@ -130,6 +199,35 @@ default.
 ### Windows Client
 
 Run everything from an elevated PowerShell window.
+
+Before installing, confirm the required tools:
+
+```powershell
+git --version
+py -3 --version
+```
+
+If `py -3 --version` fails, install Python 3.9+ from python.org and enable
+`Add python.exe to PATH` during setup. If `git --version` fails, install Git for
+Windows and reopen the elevated PowerShell window.
+
+Windows clients do not need an inbound firewall rule for pyvpn. They must be
+able to make outbound connections to the server:
+
+```text
+Outbound TCP 8443 to <server-host>
+Outbound UDP 8444 to <server-host>
+```
+
+The TCP control port can be checked before installation:
+
+```powershell
+Test-NetConnection <server-host> -Port 8443
+```
+
+`Test-NetConnection` checks the TCP control channel only. If TCP works but the
+client connects without passing traffic, check the server firewall/cloud
+security group and any client-side security product for UDP `8444`.
 
 Install:
 
