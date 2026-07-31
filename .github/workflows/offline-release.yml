@@ -208,6 +208,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     container:
       image: ${{ matrix.container }}
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - name: Install Linux build dependencies
         run: |
@@ -227,10 +229,13 @@ jobs:
       - uses: actions/checkout@v6
       - name: Snapshot existing online files
         run: |
-          find README.md src scripts -type f -print0 \
+          find README.md src scripts -type f \
+            ! -path '*/__pycache__/*' ! -name '*.pyc' ! -name '*.pyo' -print0 \
             | sort -z \
             | xargs -0 sha256sum > /tmp/pyvpn-online-files.sha256
-          find README.md src scripts -type f -printf '%m %p\n' \
+          find README.md src scripts -type f \
+            ! -path '*/__pycache__/*' ! -name '*.pyc' ! -name '*.pyo' \
+            -printf '%m %p\n' \
             | sort > /tmp/pyvpn-online-files.modes
       - name: Build shared Python 3.12
         env:
@@ -319,10 +324,13 @@ jobs:
           fi
       - name: Confirm existing online files are untouched
         run: |
-          find README.md src scripts -type f -print0 \
+          find README.md src scripts -type f \
+            ! -path '*/__pycache__/*' ! -name '*.pyc' ! -name '*.pyo' -print0 \
             | sort -z \
             | xargs -0 sha256sum > /tmp/pyvpn-online-files-current.sha256
-          find README.md src scripts -type f -printf '%m %p\n' \
+          find README.md src scripts -type f \
+            ! -path '*/__pycache__/*' ! -name '*.pyc' ! -name '*.pyo' \
+            -printf '%m %p\n' \
             | sort > /tmp/pyvpn-online-files-current.modes
           cmp /tmp/pyvpn-online-files.sha256 /tmp/pyvpn-online-files-current.sha256
           cmp /tmp/pyvpn-online-files.modes /tmp/pyvpn-online-files-current.modes
