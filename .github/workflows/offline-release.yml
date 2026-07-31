@@ -215,7 +215,6 @@ jobs:
             bzip2-devel \
             expat-devel \
             gdbm-devel \
-            git \
             libffi-devel \
             libuuid-devel \
             ncurses-devel \
@@ -226,6 +225,13 @@ jobs:
             xz-devel \
             zlib-devel
       - uses: actions/checkout@v6
+      - name: Snapshot existing online files
+        run: |
+          find README.md src scripts -type f -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > /tmp/pyvpn-online-files.sha256
+          find README.md src scripts -type f -printf '%m %p\n' \
+            | sort > /tmp/pyvpn-online-files.modes
       - name: Build shared Python 3.12
         env:
           PYTHON_SOURCE_VERSION: "3.12.13"
@@ -312,7 +318,14 @@ jobs:
             exit 1
           fi
       - name: Confirm existing online files are untouched
-        run: git diff --exit-code -- README.md src scripts
+        run: |
+          find README.md src scripts -type f -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > /tmp/pyvpn-online-files-current.sha256
+          find README.md src scripts -type f -printf '%m %p\n' \
+            | sort > /tmp/pyvpn-online-files-current.modes
+          cmp /tmp/pyvpn-online-files.sha256 /tmp/pyvpn-online-files-current.sha256
+          cmp /tmp/pyvpn-online-files.modes /tmp/pyvpn-online-files-current.modes
       - uses: actions/upload-artifact@v4
         with:
           name: offline-linux-${{ matrix.arch }}
