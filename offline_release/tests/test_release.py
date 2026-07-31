@@ -22,13 +22,13 @@ def _load_build_module():
 def test_expected_package_matrix_and_names() -> None:
     build = _load_build_module()
     expected = {
-        "pyvpn-offline-client-windows-x64-0.1.0-r1.zip",
-        "pyvpn-offline-client-linux-x86_64-0.1.0-r1.tar.gz",
-        "pyvpn-offline-server-linux-x86_64-0.1.0-r1.tar.gz",
-        "pyvpn-offline-client-linux-arm64-0.1.0-r1.tar.gz",
-        "pyvpn-offline-server-linux-arm64-0.1.0-r1.tar.gz",
-        "pyvpn-offline-client-macos-x86_64-0.1.0-r1.tar.gz",
-        "pyvpn-offline-client-macos-arm64-0.1.0-r1.tar.gz",
+        "pyvpn-offline-client-windows-x64-0.1.0-r2.zip",
+        "pyvpn-offline-client-linux-x86_64-0.1.0-r2.tar.gz",
+        "pyvpn-offline-server-linux-x86_64-0.1.0-r2.tar.gz",
+        "pyvpn-offline-client-linux-arm64-0.1.0-r2.tar.gz",
+        "pyvpn-offline-server-linux-arm64-0.1.0-r2.tar.gz",
+        "pyvpn-offline-client-macos-x86_64-0.1.0-r2.tar.gz",
+        "pyvpn-offline-client-macos-arm64-0.1.0-r2.tar.gz",
     }
     actual = {
         build._archive_name(target_platform, arch, role)
@@ -78,6 +78,45 @@ def test_customer_installers_have_no_network_install_commands() -> None:
             )
 
 
+def test_offline_clients_install_locally_and_use_server_profiles() -> None:
+    windows = (
+        OFFLINE_ROOT / "templates" / "windows-client" / "install-client.ps1"
+    ).read_text(encoding="utf-8")
+    linux = (
+        OFFLINE_ROOT / "templates" / "linux-client" / "install-client.sh"
+    ).read_text(encoding="utf-8")
+    macos = (
+        OFFLINE_ROOT / "templates" / "macos-client" / "install-client.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'Join-Path $packageRoot "pyvpn-client"' in windows
+    assert '$ConfigDir = Join-Path $InstallDir "config"' in windows
+    assert "$env:ProgramData" not in windows
+    assert "ProgramW6432" not in windows
+    assert windows.index("show `$ServerId") < windows.index("$downScript) | Out-Host")
+
+    for installer in (linux, macos):
+        assert 'INSTALL_DIR="$PACKAGE_ROOT/pyvpn-client"' in installer
+        assert 'CONFIG_DIR="$INSTALL_DIR/config"' in installer
+        assert "/usr/local/bin" not in installer
+        assert "servers.json" in installer
+        assert "pyvpn-client-switch" in installer
+        assert installer.index('"\\$SERVERS_SCRIPT" show') < installer.index(
+            '"\\$DOWN_SCRIPT"'
+        )
+
+
+def test_fresh_server_default_is_five_clients() -> None:
+    online = (REPO_ROOT / "scripts" / "linux" / "install-server.sh").read_text(
+        encoding="utf-8"
+    )
+    offline = (
+        OFFLINE_ROOT / "templates" / "linux-server" / "install-server.sh"
+    ).read_text(encoding="utf-8")
+    assert 'MAX_CLIENTS="5"' in online
+    assert 'MAX_CLIENTS="5"' in offline
+
+
 def test_manifest_detects_tampering(tmp_path: Path) -> None:
     build = _load_build_module()
     package = tmp_path / "package"
@@ -122,7 +161,7 @@ def test_assemble_all_platform_package(tmp_path: Path) -> None:
 
     all_archive = build.assemble_all(input_dir, output_dir)
 
-    assert all_archive.name == "pyvpn-offline-all-0.1.0-r1.zip"
+    assert all_archive.name == "pyvpn-offline-all-0.1.0-r2.zip"
     assert (output_dir / "SHA256SUMS").is_file()
     assert len(list(output_dir.iterdir())) == 9
     build.verify_archive(all_archive)

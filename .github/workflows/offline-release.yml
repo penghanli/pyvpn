@@ -64,7 +64,15 @@ jobs:
           $root = Get-ChildItem smoke -Directory | Select-Object -First 1
           Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue
           Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
-          & (Join-Path $root.FullName "payload/pyvpn-client/pyvpn-client.exe") --help
+          $clientExe = Join-Path $root.FullName "payload/pyvpn-client/pyvpn-client.exe"
+          $profiles = Join-Path $env:RUNNER_TEMP "pyvpn-frozen-servers.json"
+          $fingerprint = "sha256:" + ("0" * 64)
+          & $clientExe --help
+          $env:PYVPN_TOKEN = "offline_test_token"
+          & $clientExe servers --file $profiles add ci-primary `
+            --server-host 203.0.113.10 --cert-fingerprint $fingerprint --use
+          Remove-Item Env:PYVPN_TOKEN
+          & $clientExe servers --file $profiles list --no-probe
       - name: Test fresh install, upgrade, and damaged package
         shell: powershell
         run: |
@@ -76,6 +84,10 @@ jobs:
           $packageRoot = Get-ChildItem $packageDir -Directory | Select-Object -First 1
 
           $compatRoot = Join-Path $testRoot "compat"
+          $legacyDir = Join-Path $compatRoot "Program Files/pyvpn-client"
+          New-Item -ItemType Directory -Force -Path $legacyDir | Out-Null
+          $legacyMarker = Join-Path $legacyDir "legacy.marker"
+          Set-Content -Encoding ASCII -Path $legacyMarker -Value "leave unchanged"
           [Environment]::SetEnvironmentVariable(
             "ProgramW6432",
             (Join-Path $compatRoot "Program Files"),
@@ -91,33 +103,50 @@ jobs:
             (Join-Path $compatRoot "Program Files (x86)"),
             "Process"
           )
-          $installDir = Join-Path $testRoot "installed"
-          $configDir = Join-Path $testRoot "config"
+          $installDir = Join-Path $packageRoot.FullName "pyvpn-client"
+          $configDir = Join-Path $installDir "config"
           $installer = Join-Path $packageRoot.FullName "install-client.ps1"
           $fingerprint = "sha256:" + ("0" * 64)
 
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer `
+            -ServerId "ci-primary" `
             -ServerHost "203.0.113.10" `
             -Token "offline_test_token" `
-            -CertFingerprint $fingerprint `
-            -InstallDir $installDir `
-            -ConfigDir $configDir
+            -CertFingerprint $fingerprint
           if ($LASTEXITCODE -ne 0) { throw "Fresh offline install failed." }
-          $envPath = Join-Path $configDir "client.env.ps1"
-          $configHash = (Get-FileHash -Algorithm SHA256 $envPath).Hash
+          $profilesPath = Join-Path $configDir "servers.json"
+          $serversScript = Join-Path $installDir "pyvpn-client-servers.ps1"
+          $env:PYVPN_TOKEN = "offline_backup_token"
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $serversScript `
+            add ci-backup --server-host 198.51.100.20 `
+            --cert-fingerprint $fingerprint --use
+          $profileExit = $LASTEXITCODE
+          Remove-Item Env:PYVPN_TOKEN
+          if ($profileExit -ne 0) { throw "Could not add a second server profile." }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $serversScript list --no-probe
+          if ($LASTEXITCODE -ne 0) { throw "Could not list saved server profiles." }
+          $profileStore = Get-Content -Raw $profilesPath | ConvertFrom-Json
+          if ($profileStore.active_server_id -ne "ci-backup" -or
+              -not $profileStore.servers.'ci-primary' -or
+              -not $profileStore.servers.'ci-backup') {
+            throw "Fresh install did not create the expected server profiles."
+          }
+          $configHash = (Get-FileHash -Algorithm SHA256 $profilesPath).Hash
 
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer `
-            -InstallDir $installDir `
-            -ConfigDir $configDir
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer
           if ($LASTEXITCODE -ne 0) { throw "Offline upgrade failed." }
-          if ((Get-FileHash -Algorithm SHA256 $envPath).Hash -ne $configHash) {
+          if ((Get-FileHash -Algorithm SHA256 $profilesPath).Hash -ne $configHash) {
             throw "Offline upgrade did not preserve the client configuration."
           }
           if (-not (Test-Path (Join-Path $installDir "runtime.previous"))) {
             throw "Offline upgrade did not retain the previous runtime."
           }
-          if (-not (Test-Path (Join-Path $configDir "pyvpn-client-up.ps1"))) {
-            throw "Stable client launcher was not created."
+          if (-not (Test-Path (Join-Path $installDir "pyvpn-client-up.ps1"))) {
+            throw "Local client launcher was not created."
+          }
+          if ((Get-Content -Raw $legacyMarker).Trim() -ne "leave unchanged" -or
+              (Test-Path (Join-Path $legacyDir "runtime"))) {
+            throw "The local installer changed an older system-wide installation."
           }
 
           $damagedDir = Join-Path $testRoot "damaged"
@@ -285,37 +314,47 @@ jobs:
           env -u PYTHONHOME -u PYTHONPATH "$CLIENT_ROOT/payload/pyvpn-client/pyvpn-client" --help
           env -u PYTHONHOME -u PYTHONPATH "$SERVER_ROOT/payload/pyvpn-server/pyvpn-server" --help
           env -u PYTHONHOME -u PYTHONPATH "$SERVER_ROOT/payload/pyvpn-tools/pyvpn-tools" --help
-      - name: Test missing-systemd preflight
+          PROFILES="/tmp/pyvpn-frozen-servers-${{ matrix.arch }}.json"
+          env PYVPN_TOKEN=offline_test_token \
+            "$CLIENT_ROOT/payload/pyvpn-client/pyvpn-client" \
+            servers --file "$PROFILES" add ci-primary \
+            --server-host 203.0.113.10 \
+            --cert-fingerprint "sha256:$(printf '0%.0s' {1..64})" --use
+          "$CLIENT_ROOT/payload/pyvpn-client/pyvpn-client" \
+            servers --file "$PROFILES" list --no-probe
+      - name: Test missing host-component preflight
         shell: bash
         run: |
-          if [[ -d /run/systemd/system ]]; then
-            echo "systemd is unexpectedly active in the build container; skipping negative preflight"
-            exit 0
-          fi
           CLIENT_ROOT="$(find smoke-client -mindepth 1 -maxdepth 1 -type d | head -n 1)"
           SERVER_ROOT="$(find smoke-server -mindepth 1 -maxdepth 1 -type d | head -n 1)"
           CLIENT_INSTALL="/tmp/pyvpn-rejected-client-${{ matrix.arch }}"
           CLIENT_CONFIG="/tmp/pyvpn-rejected-client-config-${{ matrix.arch }}"
           SERVER_INSTALL="/tmp/pyvpn-rejected-server-${{ matrix.arch }}"
           SERVER_CONFIG="/tmp/pyvpn-rejected-server-config-${{ matrix.arch }}"
-          set +e
-          "$CLIENT_ROOT/install-client.sh" \
-            --server-host 127.0.0.1 \
-            --token offline_test_token \
-            --cert-fingerprint "sha256:$(printf '0%.0s' {1..64})" \
-            --install-dir "$CLIENT_INSTALL" \
-            --config-dir "$CLIENT_CONFIG" >/tmp/client-preflight.log 2>&1
-          CLIENT_EXIT=$?
-          "$SERVER_ROOT/install-server.sh" \
-            --public-host 127.0.0.1 \
-            --token offline_test_token \
-            --install-dir "$SERVER_INSTALL" \
-            --config-dir "$SERVER_CONFIG" >/tmp/server-preflight.log 2>&1
-          SERVER_EXIT=$?
-          set -e
-          if [[ "$CLIENT_EXIT" -eq 0 || "$SERVER_EXIT" -eq 0 ]]; then
-            echo "Installer unexpectedly accepted a system without systemd" >&2
-            exit 1
+          if [[ ! -e /dev/net/tun ]]; then
+            if "$CLIENT_ROOT/install-client.sh" \
+              --server-host 127.0.0.1 \
+              --token offline_test_token \
+              --cert-fingerprint "sha256:$(printf '0%.0s' {1..64})" \
+              --install-dir "$CLIENT_INSTALL" \
+              --config-dir "$CLIENT_CONFIG" >/tmp/client-preflight.log 2>&1; then
+              echo "Client installer unexpectedly accepted a system without TUN" >&2
+              exit 1
+            fi
+          else
+            echo "TUN is available in the build container; skipping client negative preflight"
+          fi
+          if [[ ! -d /run/systemd/system ]]; then
+            if "$SERVER_ROOT/install-server.sh" \
+              --public-host 127.0.0.1 \
+              --token offline_test_token \
+              --install-dir "$SERVER_INSTALL" \
+              --config-dir "$SERVER_CONFIG" >/tmp/server-preflight.log 2>&1; then
+              echo "Server installer unexpectedly accepted a system without systemd" >&2
+              exit 1
+            fi
+          else
+            echo "systemd is active in the build container; skipping server negative preflight"
           fi
           if [[ -e "$CLIENT_INSTALL" || -e "$CLIENT_CONFIG" ||
                 -e "$SERVER_INSTALL" || -e "$SERVER_CONFIG" ]]; then
@@ -389,6 +428,14 @@ jobs:
           PACKAGE_ROOT="$(find smoke -mindepth 1 -maxdepth 1 -type d | head -n 1)"
           env -u PYTHONHOME -u PYTHONPATH "$PACKAGE_ROOT/payload/pyvpn-client/pyvpn-client" --help
           env -u PYTHONHOME -u PYTHONPATH "$PACKAGE_ROOT/payload/pyvpn-client-tools/pyvpn-client-tools" --help
+          PROFILES="$RUNNER_TEMP/pyvpn-frozen-servers-${{ matrix.arch }}.json"
+          env PYVPN_TOKEN=offline_test_token \
+            "$PACKAGE_ROOT/payload/pyvpn-client/pyvpn-client" \
+            servers --file "$PROFILES" add ci-primary \
+            --server-host 203.0.113.10 \
+            --cert-fingerprint "sha256:$(printf '0%.0s' {1..64})" --use
+          "$PACKAGE_ROOT/payload/pyvpn-client/pyvpn-client" \
+            servers --file "$PROFILES" list --no-probe
       - name: Verify macOS 12 deployment target
         run: |
           PACKAGE_ROOT="$(find smoke -mindepth 1 -maxdepth 1 -type d | head -n 1)"

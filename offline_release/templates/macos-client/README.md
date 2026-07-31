@@ -1,53 +1,48 @@
 # pyvpn macOS 离线 CLI 客户端
 
-适用于 macOS 12+。请使用与 Mac 一致的 `x86_64`（Intel）或 `arm64`
-（Apple Silicon）压缩包。本包包含 Python、pyvpn 和全部 Python 依赖，
-安装时不访问 GitHub、PyPI 或 Homebrew。
-
-当前是基于系统 `utun` 的命令行客户端，需要使用 `sudo`，不是
-NetworkExtension 图形 App。
-
-Apple Silicon 包使用 `cryptography 49.0.0`。由于上游已移除 49.0.0 对
-Intel Mac 的支持，Intel 包使用最后仍支持 x86_64 的 `47.0.0`。
+适用于 macOS 12+。Intel Mac 使用 `x86_64` 包，Apple Silicon 使用 `arm64`
+包。本包包含 Python、pyvpn 和全部 Python 依赖，不访问 GitHub、PyPI 或
+Homebrew。
 
 ## 安装
 
-解压后打开“终端”，进入解压目录并运行：
+解压后进入目录，以 root 安装：
 
 ```bash
 sudo ./install-client.sh
 ```
 
-首次安装会询问服务器地址、共享 Token 和证书指纹。输入 Token 时不会显示
-字符。升级已有 pyvpn 时默认保留现有配置。
-
-如果 macOS 提示文件来自未知开发者，先在当前目录运行：
+如果 macOS 阻止运行，先执行：
 
 ```bash
 sudo xattr -dr com.apple.quarantine .
 ```
 
-无人值守安装：
+安装器先检查 macOS 版本、root、架构、压缩包、系统命令和磁盘空间，再在当前
+目录下创建 `pyvpn-client`。旧版 `/opt`、`/Library` 和 `/usr/local/bin`
+安装不会被读取、停止或覆盖。首次节点 ID 为 `default`。
+
+## 使用
 
 ```bash
-sudo ./install-client.sh \
+sudo ./pyvpn-client/pyvpn-client-up
+sudo ./pyvpn-client/pyvpn-client-down
+sudo ./pyvpn-client/pyvpn-client-status
+```
+
+添加节点、列出延迟、选择节点和立即切换：
+
+```bash
+sudo ./pyvpn-client/pyvpn-client-servers add aliyun-sg \
   --server-host <server-host> \
-  --token '<shared-token>' \
   --cert-fingerprint 'sha256:<server-fingerprint>'
+sudo ./pyvpn-client/pyvpn-client-servers show
+sudo ./pyvpn-client/pyvpn-client-servers list
+sudo ./pyvpn-client/pyvpn-client-servers use aliyun-sg
+sudo ./pyvpn-client/pyvpn-client-switch aliyun-sg
 ```
 
-## 连接
-
-```bash
-sudo pyvpn-client-up
-```
-
-断开和查看状态：
-
-```bash
-sudo pyvpn-client-down
-sudo pyvpn-client-status
-```
-
-客户端需要能够访问服务器 TCP `8443` 和 UDP `8444`。安装器会在修改系统
-前验证压缩包、CPU 架构和 macOS 系统命令。
+省略 `--token` 时 Token 会隐藏输入，正常输出也只显示遮盖值。节点文件是
+`pyvpn-client/config/servers.json`。这是需要 `sudo` 的 utun 命令行客户端，
+不是 NetworkExtension 图形 App。同一个 `server_id` 的信息有变化时，在添加命令
+末尾加 `--replace`。

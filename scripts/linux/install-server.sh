@@ -12,7 +12,7 @@ Options:
   --control-port PORT      TLS control port. Default: 8443.
   --udp-port PORT          UDP tunnel port. Default: 8444.
   --dns IP                 DNS server pushed to clients. Default: 1.1.1.1.
-  --max-clients N          Max simultaneous clients for the shared token. Default: 3. Range: 1-10.
+  --max-clients N          Max simultaneous clients for the shared token. Default: 5. Range: 1-10.
   --install-dir DIR        Virtualenv install directory. Default: /opt/pyvpn.
   --config-dir DIR         Runtime config directory. Default: /etc/pyvpn.
   --force-cert             Regenerate server certificate even when one exists.
@@ -29,7 +29,7 @@ TOKEN=""
 CONTROL_PORT="8443"
 UDP_PORT="8444"
 DNS="1.1.1.1"
-MAX_CLIENTS="3"
+MAX_CLIENTS="5"
 INSTALL_DIR="/opt/pyvpn"
 CONFIG_DIR="/etc/pyvpn"
 FORCE_CERT="0"

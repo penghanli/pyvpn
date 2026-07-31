@@ -43,7 +43,7 @@ finishes.
 For unattended installation:
 
 ```bash
-sudo ./install-server.sh --public-host <server-ip-or-domain> --max-clients 3
+sudo ./install-server.sh --public-host <server-ip-or-domain> --max-clients 5
 ```
 
 Upgrades retain `/etc/pyvpn/server.env`, the shared token, certificate, and

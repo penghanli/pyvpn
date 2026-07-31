@@ -3,7 +3,7 @@ import ipaddress
 
 import pytest
 
-from pyvpn.server import build_client_pool, parse_max_clients
+from pyvpn.server import DEFAULT_MAX_CLIENTS, build_client_pool, parse_max_clients
 
 
 def test_build_client_pool_starts_at_first_client_vip() -> None:
@@ -26,6 +26,7 @@ def test_build_client_pool_skips_server_vip() -> None:
 
 
 def test_parse_max_clients_limits_range() -> None:
+    assert DEFAULT_MAX_CLIENTS == 5
     assert parse_max_clients("1") == 1
     assert parse_max_clients("10") == 10
 

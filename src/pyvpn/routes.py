@@ -299,6 +299,7 @@ class MacClientNetwork:
     gateway: str
     dns: str
     manage_dns: bool = True
+    dns_state_path: Path = Path("/var/run/pyvpn/macos-dns-state.json")
     bypassed_ips: list[str] = field(default_factory=list)
     dns_manager: MacDnsManager | None = None
     default_gateway: str | None = None
@@ -362,7 +363,12 @@ class MacClientNetwork:
         self._verify_split_routes()
 
         dns_interface = self.default_interface or self.tun_name
-        self.dns_manager = MacDnsManager(dns_interface, self.dns, self.manage_dns)
+        self.dns_manager = MacDnsManager(
+            dns_interface,
+            self.dns,
+            self.manage_dns,
+            state_path=self.dns_state_path,
+        )
         self.dns_manager.setup()
 
     def _verify_split_routes(self) -> None:

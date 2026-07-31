@@ -33,7 +33,7 @@ from .replay import ReplayWindow
 from .system import require_linux_root
 from .tun import LinuxTunDevice
 
-DEFAULT_MAX_CLIENTS = 3
+DEFAULT_MAX_CLIENTS = 5
 MIN_MAX_CLIENTS = 1
 MAX_MAX_CLIENTS = 10
 

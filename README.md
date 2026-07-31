@@ -74,7 +74,7 @@ cd pyvpn
 
 sudo scripts/linux/install-server.sh \
   --public-host <vps-public-ip-or-domain> \
-  --max-clients 3
+  --max-clients 5
 ```
 
 The installer creates a `systemd` service and prints the values needed by every
@@ -84,7 +84,7 @@ client:
 Client settings:
   server host: <vps-public-ip-or-domain>
   control port: 8443
-  max clients: 3
+  max clients: 5
   token: <shared-token>
   cert fingerprint: sha256:<server-fingerprint>
 ```
@@ -289,13 +289,13 @@ sudo PYVPN_TOKEN='replace-with-a-long-random-token' pyvpn-server \
   --cert server.crt \
   --key server.key \
   --public-host vpn.example.com \
-  --max-clients 3
+  --max-clients 5
 ```
 
 ## Important v1 Limits
 
 - One shared token supports up to `--max-clients` simultaneous clients, from 1
-  to 10. The default is 3.
+  to 10. The default is 5.
 - IPv4 forwarding only. Block IPv6 separately on the client firewall if leak
   prevention matters.
 - Windows client support is experimental and depends on Wintun.

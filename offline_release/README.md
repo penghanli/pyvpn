@@ -1,7 +1,10 @@
 # pyvpn Offline Release
 
 This directory builds self-contained pyvpn packages for customers who cannot
-reach GitHub or PyPI. Existing source installers remain unchanged.
+reach GitHub or PyPI. Offline client packages install into `pyvpn-client`
+inside the extracted package directory and keep server profiles in a local
+`config/servers.json`. Existing system-wide client installations are left
+unchanged. Fresh server installs default to five simultaneous clients.
 
 ## Outputs
 
@@ -55,8 +58,8 @@ Push `offline-v<version>` only after the matching commit is on `main`. The tag
 workflow builds all seven packages and creates a prerelease:
 
 ```text
-git tag offline-v0.1.0-r1
-git push origin offline-v0.1.0-r1
+git tag offline-v0.1.0-r2
+git push origin offline-v0.1.0-r2
 ```
 
 Keep the release as a prerelease until Windows x64, Linux x86_64, Linux ARM64,
@@ -64,7 +67,7 @@ Intel Mac, and Apple Silicon Mac have each passed a real connect, route, DNS,
 and disconnect-restoration test. Then promote the same release:
 
 ```text
-gh release edit offline-v0.1.0-r1 --prerelease=false
+gh release edit offline-v0.1.0-r2 --prerelease=false
 ```
 
 Download and verify every release asset into the ignored local `dist/`:

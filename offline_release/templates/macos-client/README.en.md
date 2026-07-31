@@ -1,55 +1,50 @@
 # pyvpn macOS Offline CLI Client
 
-This package supports macOS 12+. Use the `x86_64` archive for Intel Macs or the
-`arm64` archive for Apple Silicon. Python, pyvpn, and all Python dependencies
-are included; installation does not contact GitHub, PyPI, or Homebrew.
-
-This is the current sudo-based `utun` command-line client, not a graphical
-NetworkExtension application.
-
-The Apple Silicon package uses `cryptography 49.0.0`. Upstream removed Intel
-Mac support in 49.0.0, so the Intel package uses the final x86_64-supported
-release, `47.0.0`.
+For macOS 12+. Use `x86_64` on Intel Macs and `arm64` on Apple Silicon. Python,
+pyvpn, and all Python dependencies are included, with no GitHub, PyPI, or
+Homebrew access during installation.
 
 ## Install
 
-Extract the archive, open Terminal, enter the extracted directory, and run:
+Extract the archive, enter its directory, and install as root:
 
 ```bash
 sudo ./install-client.sh
 ```
 
-A new installation prompts for the server host, shared token, and certificate
-fingerprint. Token input is hidden. Existing pyvpn settings are reused during
-an upgrade.
-
-If macOS reports that files are from an unidentified developer, run:
+If macOS blocks the files, first run:
 
 ```bash
 sudo xattr -dr com.apple.quarantine .
 ```
 
-For unattended installation:
+The installer checks macOS version, root access, architecture, package
+integrity, system commands, and disk space before creating `pyvpn-client` under
+the current package directory. Older `/opt`, `/Library`, and `/usr/local/bin`
+installations are not read, stopped, or overwritten. The first server ID is
+`default`.
+
+## Use
 
 ```bash
-sudo ./install-client.sh \
+sudo ./pyvpn-client/pyvpn-client-up
+sudo ./pyvpn-client/pyvpn-client-down
+sudo ./pyvpn-client/pyvpn-client-status
+```
+
+Add a server, list latency, select a server, or switch immediately:
+
+```bash
+sudo ./pyvpn-client/pyvpn-client-servers add aliyun-sg \
   --server-host <server-host> \
-  --token '<shared-token>' \
   --cert-fingerprint 'sha256:<server-fingerprint>'
+sudo ./pyvpn-client/pyvpn-client-servers show
+sudo ./pyvpn-client/pyvpn-client-servers list
+sudo ./pyvpn-client/pyvpn-client-servers use aliyun-sg
+sudo ./pyvpn-client/pyvpn-client-switch aliyun-sg
 ```
 
-## Connect
-
-```bash
-sudo pyvpn-client-up
-```
-
-Disconnect and inspect status:
-
-```bash
-sudo pyvpn-client-down
-sudo pyvpn-client-status
-```
-
-The client must reach server TCP `8443` and UDP `8444`. The package, CPU
-architecture, and required macOS commands are checked before installation.
+Token input is hidden when `--token` is omitted and normal output masks it.
+Profiles are stored in `pyvpn-client/config/servers.json`. This is a sudo utun
+CLI client, not a native NetworkExtension app. Append `--replace` to the add
+command when details for the same `server_id` change.

@@ -9,6 +9,7 @@ import platform
 import signal
 import socket
 import ssl
+import sys
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +21,7 @@ from .errors import AuthenticationError, ProtocolError
 from .framing import read_frame, write_frame
 from .ip import inspect_ipv4
 from .packet import open_packet, parse_header, seal_packet
+from .profiles import ProfileError, selected_profile
 from .replay import ReplayWindow
 from .routes import LinuxClientNetwork, MacClientNetwork, resolve_ipv4
 from .routes import WindowsClientNetwork
@@ -39,6 +41,7 @@ class ClientConfig:
     manage_dns: bool
     bypass_ips: list[str]
     stop_file: str | None
+    dns_state_file: str | None = None
 
 
 @dataclass
@@ -125,13 +128,16 @@ class VpnClient:
                 network_cls = WindowsClientNetwork
             else:
                 network_cls = MacClientNetwork
-            self.network = network_cls(
-                tun_name=self.tun.name,
-                server_ips=[server_ip, self.session.udp_host, *self.config.bypass_ips],
-                gateway=self.session.server_vip,
-                dns=self.session.dns,
-                manage_dns=self.config.manage_dns,
-            )
+            network_kwargs = {
+                "tun_name": self.tun.name,
+                "server_ips": [server_ip, self.session.udp_host, *self.config.bypass_ips],
+                "gateway": self.session.server_vip,
+                "dns": self.session.dns,
+                "manage_dns": self.config.manage_dns,
+            }
+            if current_platform == "Darwin" and self.config.dns_state_file:
+                network_kwargs["dns_state_path"] = Path(self.config.dns_state_file)
+            self.network = network_cls(**network_kwargs)
             self.network.setup()
             print("client routes and DNS configured", flush=True)
 
@@ -330,14 +336,19 @@ def _token_from_arg(value: str | None) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the pyvpn client")
-    parser.add_argument("--server-host", required=True)
-    parser.add_argument("--control-port", type=int, default=8443)
+    parser = argparse.ArgumentParser(
+        description="Run the pyvpn client",
+        epilog="Manage saved servers with: pyvpn-client servers --file PATH --help",
+    )
+    parser.add_argument("--server-host")
+    parser.add_argument("--control-port", type=int)
     parser.add_argument("--token")
-    parser.add_argument("--cert-fingerprint", required=True)
+    parser.add_argument("--cert-fingerprint")
+    parser.add_argument("--profiles", help="Path to a saved servers.json file")
+    parser.add_argument("--server-id", help="Saved server_id to use instead of the active server")
     parser.add_argument("--client-id", default=str(uuid.uuid4()))
-    parser.add_argument("--tun", default="pyvpn0", dest="tun_name")
-    parser.add_argument("--mtu", type=int, default=DEFAULT_MTU)
+    parser.add_argument("--tun", dest="tun_name")
+    parser.add_argument("--mtu", type=int)
     parser.add_argument("--no-dns", action="store_true")
     parser.add_argument(
         "--bypass-ip",
@@ -350,27 +361,64 @@ def build_parser() -> argparse.ArgumentParser:
         "--stop-file",
         help="Path to a file that requests graceful shutdown when it appears.",
     )
+    parser.add_argument(
+        "--dns-state-file",
+        help="macOS DNS backup state path; ignored on other platforms.",
+    )
     return parser
 
 
 async def async_main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    profile = None
+    if args.profiles:
+        try:
+            profile = selected_profile(Path(args.profiles), args.server_id)
+        except ProfileError as exc:
+            raise SystemExit(str(exc)) from exc
+    elif args.server_id:
+        raise SystemExit("--server-id requires --profiles")
+
+    server_host = args.server_host or (profile.server_host if profile else None)
+    cert_fingerprint = args.cert_fingerprint or (profile.cert_fingerprint if profile else None)
+    if not server_host:
+        raise SystemExit("server host is required: pass --server-host or --profiles")
+    if not cert_fingerprint:
+        raise SystemExit(
+            "certificate fingerprint is required: pass --cert-fingerprint or --profiles"
+        )
+    token = args.token or (profile.token if profile else None)
+    control_port = (
+        args.control_port
+        if args.control_port is not None
+        else (profile.control_port if profile else 8443)
+    )
+    tun_name = args.tun_name or (profile.tun_name if profile else "pyvpn0")
+    mtu = args.mtu if args.mtu is not None else (profile.mtu if profile else DEFAULT_MTU)
+    no_dns = args.no_dns or (profile.no_dns if profile else False)
+    bypass_ips = [*(profile.bypass_ips if profile else ()), *args.bypass_ip]
     config = ClientConfig(
-        server_host=args.server_host,
-        control_port=args.control_port,
-        token=_token_from_arg(args.token),
-        cert_fingerprint=args.cert_fingerprint,
+        server_host=server_host,
+        control_port=control_port,
+        token=_token_from_arg(token),
+        cert_fingerprint=cert_fingerprint,
         client_id=args.client_id,
-        tun_name=args.tun_name,
-        mtu=args.mtu,
-        manage_dns=not args.no_dns,
-        bypass_ips=[resolve_ipv4(value) for value in args.bypass_ip],
+        tun_name=tun_name,
+        mtu=mtu,
+        manage_dns=not no_dns,
+        bypass_ips=[resolve_ipv4(value) for value in bypass_ips],
         stop_file=args.stop_file,
+        dns_state_file=args.dns_state_file,
     )
     await VpnClient(config).run()
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "servers":
+        from .profiles import main as profiles_main
+
+        profiles_main(sys.argv[2:])
+        return
     asyncio.run(async_main())
 
 
