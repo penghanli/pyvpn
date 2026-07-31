@@ -1,0 +1,430 @@
+name: Offline release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "offline-v*"
+    paths:
+      - "offline_release/**"
+      - ".github/workflows/offline-release.yml"
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+  pull_request:
+    paths:
+      - "offline_release/**"
+      - ".github/workflows/offline-release.yml"
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-client:
+    name: Windows x64 client
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: x64
+      - name: Install pinned build dependencies
+        run: python -m pip install -r offline_release/build-requirements.txt
+      - name: Parse PowerShell installers
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "offline_release/templates/windows-client/install-client.ps1"),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+      - name: Run tests
+        run: python -m pytest tests offline_release/tests
+      - name: Build Windows offline client
+        run: >
+          python offline_release/build_package.py build
+          --platform windows --arch x64 --role client
+      - name: Smoke-test frozen client
+        shell: powershell
+        run: |
+          $archive = "offline_release/dist/pyvpn-offline-client-windows-x64-$(Get-Content offline_release/VERSION).zip"
+          Expand-Archive -LiteralPath $archive -DestinationPath smoke
+          $root = Get-ChildItem smoke -Directory | Select-Object -First 1
+          Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue
+          Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+          & (Join-Path $root.FullName "payload/pyvpn-client/pyvpn-client.exe") --help
+      - name: Test fresh install, upgrade, and damaged package
+        shell: powershell
+        run: |
+          $version = Get-Content offline_release/VERSION
+          $archive = "offline_release/dist/pyvpn-offline-client-windows-x64-$version.zip"
+          $testRoot = Join-Path $env:RUNNER_TEMP "pyvpn-offline-install-test"
+          $packageDir = Join-Path $testRoot "package"
+          Expand-Archive -LiteralPath $archive -DestinationPath $packageDir
+          $packageRoot = Get-ChildItem $packageDir -Directory | Select-Object -First 1
+
+          $compatRoot = Join-Path $testRoot "compat"
+          [Environment]::SetEnvironmentVariable(
+            "ProgramW6432",
+            (Join-Path $compatRoot "Program Files"),
+            "Process"
+          )
+          [Environment]::SetEnvironmentVariable(
+            "ProgramFiles",
+            (Join-Path $compatRoot "Program Files"),
+            "Process"
+          )
+          [Environment]::SetEnvironmentVariable(
+            "ProgramFiles(x86)",
+            (Join-Path $compatRoot "Program Files (x86)"),
+            "Process"
+          )
+          $installDir = Join-Path $testRoot "installed"
+          $configDir = Join-Path $testRoot "config"
+          $installer = Join-Path $packageRoot.FullName "install-client.ps1"
+          $fingerprint = "sha256:" + ("0" * 64)
+
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer `
+            -ServerHost "203.0.113.10" `
+            -Token "offline_test_token" `
+            -CertFingerprint $fingerprint `
+            -InstallDir $installDir `
+            -ConfigDir $configDir
+          if ($LASTEXITCODE -ne 0) { throw "Fresh offline install failed." }
+          $envPath = Join-Path $configDir "client.env.ps1"
+          $configHash = (Get-FileHash -Algorithm SHA256 $envPath).Hash
+
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer `
+            -InstallDir $installDir `
+            -ConfigDir $configDir
+          if ($LASTEXITCODE -ne 0) { throw "Offline upgrade failed." }
+          if ((Get-FileHash -Algorithm SHA256 $envPath).Hash -ne $configHash) {
+            throw "Offline upgrade did not preserve the client configuration."
+          }
+          if (-not (Test-Path (Join-Path $installDir "runtime.previous"))) {
+            throw "Offline upgrade did not retain the previous runtime."
+          }
+          if (-not (Test-Path (Join-Path $configDir "pyvpn-client-up.ps1"))) {
+            throw "Stable client launcher was not created."
+          }
+
+          $damagedDir = Join-Path $testRoot "damaged"
+          Expand-Archive -LiteralPath $archive -DestinationPath $damagedDir
+          $damagedRoot = Get-ChildItem $damagedDir -Directory | Select-Object -First 1
+          Add-Content -LiteralPath (Join-Path $damagedRoot.FullName "README.en.md") -Value "damaged"
+          $rejectedInstall = Join-Path $testRoot "rejected-install"
+          $rejectedConfig = Join-Path $testRoot "rejected-config"
+          $rejectLog = Join-Path $testRoot "damaged-package.log"
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $damagedRoot.FullName "install-client.ps1") `
+            -ServerHost "203.0.113.10" `
+            -Token "offline_test_token" `
+            -CertFingerprint $fingerprint `
+            -InstallDir $rejectedInstall `
+            -ConfigDir $rejectedConfig *> $rejectLog
+          $rejectExit = $LASTEXITCODE
+          if ($rejectExit -eq 0) { throw "Damaged package was accepted." }
+          if ((Test-Path $rejectedInstall) -or (Test-Path $rejectedConfig)) {
+            throw "Damaged package changed target directories."
+          }
+
+          $wrongArchDir = Join-Path $testRoot "wrong-arch"
+          Expand-Archive -LiteralPath $archive -DestinationPath $wrongArchDir
+          $wrongArchRoot = Get-ChildItem $wrongArchDir -Directory | Select-Object -First 1
+          $metadata = Join-Path $wrongArchRoot.FullName "PACKAGE-METADATA"
+          (Get-Content -Raw $metadata).Replace("ARCH=x64", "ARCH=arm64") |
+            Set-Content -Encoding ASCII $metadata
+          $wrongArchInstall = Join-Path $testRoot "wrong-arch-install"
+          $wrongArchConfig = Join-Path $testRoot "wrong-arch-config"
+          $wrongArchLog = Join-Path $testRoot "wrong-arch.log"
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $wrongArchRoot.FullName "install-client.ps1") `
+            -ServerHost "203.0.113.10" `
+            -Token "offline_test_token" `
+            -CertFingerprint $fingerprint `
+            -InstallDir $wrongArchInstall `
+            -ConfigDir $wrongArchConfig *> $wrongArchLog
+          $wrongArchExit = $LASTEXITCODE
+          if ($wrongArchExit -eq 0) { throw "Wrong-architecture package was accepted." }
+          if ((Test-Path $wrongArchInstall) -or (Test-Path $wrongArchConfig)) {
+            throw "Wrong-architecture package changed target directories."
+          }
+      - name: Confirm existing online files are untouched
+        run: git diff --exit-code -- README.md src scripts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: offline-windows-x64
+          path: offline_release/dist/pyvpn-offline-client-windows-x64-*.zip
+          if-no-files-found: error
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            container: quay.io/pypa/manylinux_2_28_x86_64:latest
+            python: /opt/python/cp312-cp312/bin/python
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64:latest
+            python: /opt/python/cp312-cp312/bin/python
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ${{ matrix.container }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install pinned build dependencies
+        run: ${{ matrix.python }} -m pip install -r offline_release/build-requirements.txt
+      - name: Parse shell installers
+        run: |
+          bash -n offline_release/templates/linux-client/install-client.sh
+          bash -n offline_release/templates/linux-server/install-server.sh
+      - name: Run tests
+        run: ${{ matrix.python }} -m pytest tests offline_release/tests
+      - name: Build Linux client
+        run: >
+          ${{ matrix.python }} offline_release/build_package.py build
+          --platform linux --arch ${{ matrix.arch }} --role client
+      - name: Build Linux server
+        run: >
+          ${{ matrix.python }} offline_release/build_package.py build
+          --platform linux --arch ${{ matrix.arch }} --role server
+      - name: Smoke-test frozen programs
+        run: |
+          mkdir -p smoke-client smoke-server
+          tar -xzf offline_release/dist/pyvpn-offline-client-linux-${{ matrix.arch }}-*.tar.gz -C smoke-client
+          tar -xzf offline_release/dist/pyvpn-offline-server-linux-${{ matrix.arch }}-*.tar.gz -C smoke-server
+          CLIENT_ROOT="$(find smoke-client -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          SERVER_ROOT="$(find smoke-server -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          env -u PYTHONHOME -u PYTHONPATH "$CLIENT_ROOT/payload/pyvpn-client/pyvpn-client" --help
+          env -u PYTHONHOME -u PYTHONPATH "$SERVER_ROOT/payload/pyvpn-server/pyvpn-server" --help
+          env -u PYTHONHOME -u PYTHONPATH "$SERVER_ROOT/payload/pyvpn-tools/pyvpn-tools" --help
+      - name: Test missing-systemd preflight
+        shell: bash
+        run: |
+          if [[ -d /run/systemd/system ]]; then
+            echo "systemd is unexpectedly active in the build container; skipping negative preflight"
+            exit 0
+          fi
+          CLIENT_ROOT="$(find smoke-client -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          SERVER_ROOT="$(find smoke-server -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          CLIENT_INSTALL="/tmp/pyvpn-rejected-client-${{ matrix.arch }}"
+          CLIENT_CONFIG="/tmp/pyvpn-rejected-client-config-${{ matrix.arch }}"
+          SERVER_INSTALL="/tmp/pyvpn-rejected-server-${{ matrix.arch }}"
+          SERVER_CONFIG="/tmp/pyvpn-rejected-server-config-${{ matrix.arch }}"
+          set +e
+          "$CLIENT_ROOT/install-client.sh" \
+            --server-host 127.0.0.1 \
+            --token offline_test_token \
+            --cert-fingerprint "sha256:$(printf '0%.0s' {1..64})" \
+            --install-dir "$CLIENT_INSTALL" \
+            --config-dir "$CLIENT_CONFIG" >/tmp/client-preflight.log 2>&1
+          CLIENT_EXIT=$?
+          "$SERVER_ROOT/install-server.sh" \
+            --public-host 127.0.0.1 \
+            --token offline_test_token \
+            --install-dir "$SERVER_INSTALL" \
+            --config-dir "$SERVER_CONFIG" >/tmp/server-preflight.log 2>&1
+          SERVER_EXIT=$?
+          set -e
+          if [[ "$CLIENT_EXIT" -eq 0 || "$SERVER_EXIT" -eq 0 ]]; then
+            echo "Installer unexpectedly accepted a system without systemd" >&2
+            exit 1
+          fi
+          if [[ -e "$CLIENT_INSTALL" || -e "$CLIENT_CONFIG" ||
+                -e "$SERVER_INSTALL" || -e "$SERVER_CONFIG" ]]; then
+            echo "Failed preflight changed an installation target" >&2
+            exit 1
+          fi
+      - name: Confirm existing online files are untouched
+        run: git diff --exit-code -- README.md src scripts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: offline-linux-${{ matrix.arch }}
+          path: |
+            offline_release/dist/pyvpn-offline-client-linux-${{ matrix.arch }}-*.tar.gz
+            offline_release/dist/pyvpn-offline-server-linux-${{ matrix.arch }}-*.tar.gz
+          if-no-files-found: error
+
+  macos-client:
+    name: macOS ${{ matrix.arch }} client
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-15-intel
+            python_arch: x64
+            requirements: offline_release/build-requirements-macos-x86_64.txt
+          - arch: arm64
+            runner: macos-15
+            python_arch: arm64
+            requirements: offline_release/build-requirements.txt
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: ${{ matrix.python_arch }}
+      - name: Prepare Intel macOS cryptography build
+        if: matrix.arch == 'x86_64'
+        run: |
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "OPENSSL_STATIC=1" >> "$GITHUB_ENV"
+          echo "PIP_NO_BINARY=cryptography" >> "$GITHUB_ENV"
+      - name: Install pinned build dependencies
+        run: python -m pip install -r ${{ matrix.requirements }}
+      - name: Parse macOS installer
+        run: bash -n offline_release/templates/macos-client/install-client.sh
+      - name: Run tests
+        run: python -m pytest tests offline_release/tests
+      - name: Build macOS offline client
+        run: >
+          python offline_release/build_package.py build
+          --platform macos --arch ${{ matrix.arch }} --role client
+      - name: Smoke-test frozen client
+        run: |
+          mkdir -p smoke
+          tar -xzf offline_release/dist/pyvpn-offline-client-macos-${{ matrix.arch }}-*.tar.gz -C smoke
+          PACKAGE_ROOT="$(find smoke -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          env -u PYTHONHOME -u PYTHONPATH "$PACKAGE_ROOT/payload/pyvpn-client/pyvpn-client" --help
+          env -u PYTHONHOME -u PYTHONPATH "$PACKAGE_ROOT/payload/pyvpn-client-tools/pyvpn-client-tools" --help
+      - name: Verify macOS 12 deployment target
+        run: |
+          PACKAGE_ROOT="$(find smoke -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          python - "$PACKAGE_ROOT" <<'PY'
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          checked = 0
+          too_new = []
+          for path in root.rglob("*"):
+              if not path.is_file():
+                  continue
+              kind = subprocess.run(
+                  ["file", str(path)],
+                  check=True,
+                  text=True,
+                  stdout=subprocess.PIPE,
+              ).stdout
+              if "Mach-O" not in kind:
+                  continue
+              checked += 1
+              load_commands = subprocess.run(
+                  ["otool", "-l", str(path)],
+                  check=True,
+                  text=True,
+                  stdout=subprocess.PIPE,
+              ).stdout
+              versions = re.findall(r"\bminos\s+([0-9.]+)", load_commands)
+              versions += re.findall(
+                  r"LC_VERSION_MIN_MACOSX.*?\bversion\s+([0-9.]+)",
+                  load_commands,
+                  flags=re.DOTALL,
+              )
+              for value in versions:
+                  parts = tuple(int(part) for part in value.split("."))
+                  normalized = (parts + (0, 0, 0))[:3]
+                  if normalized > (12, 0, 0):
+                      too_new.append(f"{path.relative_to(root)}: {value}")
+          if checked == 0:
+              raise SystemExit("No Mach-O files found in macOS package")
+          if too_new:
+              raise SystemExit("macOS deployment target is too new:\n" + "\n".join(too_new))
+          print(f"Verified macOS 12 target across {checked} Mach-O files")
+          PY
+      - name: Confirm existing online files are untouched
+        run: git diff --exit-code -- README.md src scripts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: offline-macos-${{ matrix.arch }}
+          path: offline_release/dist/pyvpn-offline-client-macos-${{ matrix.arch }}-*.tar.gz
+          if-no-files-found: error
+
+  assemble:
+    name: Assemble release
+    needs:
+      - windows-client
+      - linux
+      - macos-client
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-input
+          merge-multiple: true
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/offline-v')
+        run: |
+          EXPECTED_TAG="offline-v$(cat offline_release/VERSION)"
+          if [[ "$GITHUB_REF_NAME" != "$EXPECTED_TAG" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match $EXPECTED_TAG" >&2
+            exit 1
+          fi
+      - name: Assemble and verify all-platform release
+        run: |
+          python offline_release/build_package.py assemble \
+            --input-dir release-input \
+            --output-dir release-output
+          for archive in release-output/*.zip release-output/*.tar.gz; do
+            python offline_release/build_package.py verify "$archive"
+          done
+          (cd release-output && sha256sum --check --quiet SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pyvpn-offline-release
+          path: release-output/*
+          if-no-files-found: error
+
+  release:
+    name: Create prerelease
+    if: startsWith(github.ref, 'refs/tags/offline-v')
+    needs:
+      - assemble
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pyvpn-offline-release
+          path: release-output
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release-output/* --clobber
+          else
+            VERSION="${GITHUB_REF_NAME#offline-v}"
+            gh release create "$GITHUB_REF_NAME" release-output/* \
+              --prerelease \
+              --title "pyvpn offline $VERSION" \
+              --notes "Self-contained offline packages for Windows, Linux, and macOS. See the README inside the archive matching the target system."
+          fi

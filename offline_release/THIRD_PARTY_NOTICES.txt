@@ -1,0 +1,32 @@
+pyvpn offline distribution third-party notices
+================================================
+
+This distribution contains a CPython runtime.
+Copyright (c) Python Software Foundation.
+License: Python Software Foundation License Version 2.
+https://docs.python.org/3/license.html
+
+This distribution contains cryptography.
+Copyright (c) The Python Cryptographic Authority and individual contributors.
+Licenses: Apache License 2.0 or BSD 3-Clause License.
+https://github.com/pyca/cryptography
+
+The cryptography runtime includes a statically linked OpenSSL library.
+OpenSSL is distributed under the Apache License 2.0.
+https://www.openssl.org/
+
+This distribution may contain cffi and pycparser as dependencies of cryptography.
+cffi is distributed under the MIT License.
+pycparser is distributed under the BSD 3-Clause License.
+
+The executable bundles are produced with PyInstaller.
+PyInstaller is distributed under GPL-2.0-or-later with a special exception
+that permits distribution of programs built with PyInstaller.
+https://pyinstaller.org/
+
+The Windows package contains an official prebuilt Wintun DLL downloaded from
+https://www.wintun.net/. Its separate prebuilt-binaries license is included as
+licenses/WINTUN-LICENSE.txt in the Windows archive.
+
+pyvpn itself is distributed under the MIT License. The license text is
+included as LICENSE.txt.
