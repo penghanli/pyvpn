@@ -500,11 +500,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release-output/* --clobber
+          if gh release view "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release-output/* \
+              --clobber \
+              --repo "$GITHUB_REPOSITORY"
           else
             VERSION="${GITHUB_REF_NAME#offline-v}"
             gh release create "$GITHUB_REF_NAME" release-output/* \
+              --repo "$GITHUB_REPOSITORY" \
               --prerelease \
               --title "pyvpn offline $VERSION" \
               --notes "Self-contained offline packages for Windows, Linux, and macOS. See the README inside the archive matching the target system."
