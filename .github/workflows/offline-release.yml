@@ -182,6 +182,7 @@ jobs:
           if ((Test-Path $wrongArchInstall) -or (Test-Path $wrongArchConfig)) {
             throw "Wrong-architecture package changed target directories."
           }
+          exit 0
       - name: Confirm existing online files are untouched
         run: git diff --exit-code -- README.md src scripts
       - uses: actions/upload-artifact@v4
@@ -208,16 +209,13 @@ jobs:
     container:
       image: ${{ matrix.container }}
     steps:
-      - uses: actions/checkout@v6
-      - name: Build shared Python 3.12
-        env:
-          PYTHON_SOURCE_VERSION: "3.12.13"
-          PYTHON_SOURCE_SHA256: "c08bc65a81971c1dd5783182826503369466c7e67374d1646519adf05207b684"
+      - name: Install Linux build dependencies
         run: |
           dnf -y install \
             bzip2-devel \
             expat-devel \
             gdbm-devel \
+            git \
             libffi-devel \
             libuuid-devel \
             ncurses-devel \
@@ -227,6 +225,12 @@ jobs:
             xz \
             xz-devel \
             zlib-devel
+      - uses: actions/checkout@v6
+      - name: Build shared Python 3.12
+        env:
+          PYTHON_SOURCE_VERSION: "3.12.13"
+          PYTHON_SOURCE_SHA256: "c08bc65a81971c1dd5783182826503369466c7e67374d1646519adf05207b684"
+        run: |
           SOURCE_ARCHIVE="/tmp/Python-${PYTHON_SOURCE_VERSION}.tar.xz"
           curl --fail --location --retry 3 \
             "https://www.python.org/ftp/python/${PYTHON_SOURCE_VERSION}/Python-${PYTHON_SOURCE_VERSION}.tar.xz" \
