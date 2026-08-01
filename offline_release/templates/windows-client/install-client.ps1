@@ -386,9 +386,15 @@ if (`$otherClients.Count -gt 0) {
   throw "Another pyvpn client is running. Disconnect the old version before starting this one."
 }
 `$quotedStartScript = '"' + `$startScript + '"'
-`$process = Start-Process -FilePath "powershell.exe" `
-  -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", `$quotedStartScript) `
-  -WindowStyle Hidden -RedirectStandardOutput `$logPath -RedirectStandardError `$errLogPath -PassThru
+`$startProcessParams = @{
+  FilePath = "powershell.exe"
+  ArgumentList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", `$quotedStartScript)
+  WindowStyle = "Hidden"
+  RedirectStandardOutput = `$logPath
+  RedirectStandardError = `$errLogPath
+  PassThru = `$true
+}
+`$process = Start-Process @startProcessParams
 Set-Content -Encoding ASCII -Path `$pidPath -Value ([string]`$process.Id)
 Start-Sleep -Seconds 2
 if (-not (Get-Process -Id `$process.Id -ErrorAction SilentlyContinue)) {

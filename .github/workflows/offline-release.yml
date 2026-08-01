@@ -141,8 +141,31 @@ jobs:
           if (-not (Test-Path (Join-Path $installDir "runtime.previous"))) {
             throw "Offline upgrade did not retain the previous runtime."
           }
-          if (-not (Test-Path (Join-Path $installDir "pyvpn-client-up.ps1"))) {
+          $upScript = Join-Path $installDir "pyvpn-client-up.ps1"
+          if (-not (Test-Path $upScript)) {
             throw "Local client launcher was not created."
+          }
+          $launcherTokens = $null
+          $launcherErrors = $null
+          $launcherAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            $upScript,
+            [ref]$launcherTokens,
+            [ref]$launcherErrors
+          )
+          if ($launcherErrors.Count -gt 0) {
+            $launcherErrors | ForEach-Object { Write-Error $_.Message }
+            throw "Generated client launcher contains PowerShell syntax errors."
+          }
+          $orphanArgumentList = @($launcherAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and
+              $node.GetCommandName() -eq "-ArgumentList"
+          }, $true))
+          if ($orphanArgumentList.Count -gt 0) {
+            throw "Generated client launcher contains an orphaned -ArgumentList command."
+          }
+          if ((Get-Content -Raw $upScript) -notmatch 'Start-Process @startProcessParams') {
+            throw "Generated client launcher does not use stable Start-Process splatting."
           }
           if ((Get-Content -Raw $legacyMarker).Trim() -ne "leave unchanged" -or
               (Test-Path (Join-Path $legacyDir "runtime"))) {

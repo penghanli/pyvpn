@@ -22,13 +22,13 @@ def _load_build_module():
 def test_expected_package_matrix_and_names() -> None:
     build = _load_build_module()
     expected = {
-        "pyvpn-offline-client-windows-x64-0.1.0-r2.zip",
-        "pyvpn-offline-client-linux-x86_64-0.1.0-r2.tar.gz",
-        "pyvpn-offline-server-linux-x86_64-0.1.0-r2.tar.gz",
-        "pyvpn-offline-client-linux-arm64-0.1.0-r2.tar.gz",
-        "pyvpn-offline-server-linux-arm64-0.1.0-r2.tar.gz",
-        "pyvpn-offline-client-macos-x86_64-0.1.0-r2.tar.gz",
-        "pyvpn-offline-client-macos-arm64-0.1.0-r2.tar.gz",
+        "pyvpn-offline-client-windows-x64-0.1.0-r3.zip",
+        "pyvpn-offline-client-linux-x86_64-0.1.0-r3.tar.gz",
+        "pyvpn-offline-server-linux-x86_64-0.1.0-r3.tar.gz",
+        "pyvpn-offline-client-linux-arm64-0.1.0-r3.tar.gz",
+        "pyvpn-offline-server-linux-arm64-0.1.0-r3.tar.gz",
+        "pyvpn-offline-client-macos-x86_64-0.1.0-r3.tar.gz",
+        "pyvpn-offline-client-macos-arm64-0.1.0-r3.tar.gz",
     }
     actual = {
         build._archive_name(target_platform, arch, role)
@@ -106,6 +106,16 @@ def test_offline_clients_install_locally_and_use_server_profiles() -> None:
         )
 
 
+def test_windows_launcher_uses_stable_start_process_splatting() -> None:
+    windows = (
+        OFFLINE_ROOT / "templates" / "windows-client" / "install-client.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert "`$startProcessParams = @{" in windows
+    assert "`$process = Start-Process @startProcessParams" in windows
+    assert 'Start-Process -FilePath "powershell.exe" `' not in windows
+
+
 def test_fresh_server_default_is_five_clients() -> None:
     online = (REPO_ROOT / "scripts" / "linux" / "install-server.sh").read_text(
         encoding="utf-8"
@@ -161,7 +171,7 @@ def test_assemble_all_platform_package(tmp_path: Path) -> None:
 
     all_archive = build.assemble_all(input_dir, output_dir)
 
-    assert all_archive.name == "pyvpn-offline-all-0.1.0-r2.zip"
+    assert all_archive.name == "pyvpn-offline-all-0.1.0-r3.zip"
     assert (output_dir / "SHA256SUMS").is_file()
     assert len(list(output_dir.iterdir())) == 9
     build.verify_archive(all_archive)

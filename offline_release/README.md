@@ -58,8 +58,8 @@ Push `offline-v<version>` only after the matching commit is on `main`. The tag
 workflow builds all seven packages and creates a prerelease:
 
 ```text
-git tag offline-v0.1.0-r2
-git push origin offline-v0.1.0-r2
+git tag offline-v0.1.0-r3
+git push origin offline-v0.1.0-r3
 ```
 
 Keep the release as a prerelease until Windows x64, Linux x86_64, Linux ARM64,
@@ -67,7 +67,7 @@ Intel Mac, and Apple Silicon Mac have each passed a real connect, route, DNS,
 and disconnect-restoration test. Then promote the same release:
 
 ```text
-gh release edit offline-v0.1.0-r2 --prerelease=false
+gh release edit offline-v0.1.0-r3 --prerelease=false
 ```
 
 Download and verify every release asset into the ignored local `dist/`:
