@@ -172,6 +172,7 @@ def add_profile(
     replace: bool = False,
     make_active: bool = False,
 ) -> ProfileStore:
+    _require_printable_token(profile.token)
     store = load_profile_store(path, allow_missing=True)
     if profile.server_id in store.servers and not replace:
         raise ProfileError(
@@ -197,6 +198,8 @@ def select_profile(path: Path, server_id: str) -> ProfileStore:
 
 
 def update_profile_token(path: Path, server_id: str | None, token: str) -> ServerProfile:
+    token = normalize_token(token)
+    _require_printable_token(token)
     store = load_profile_store(path)
     selected_id = server_id or store.active_server_id
     if selected_id is None:
@@ -213,6 +216,11 @@ def update_profile_token(path: Path, server_id: str | None, token: str) -> Serve
         ProfileStore(active_server_id=store.active_server_id, servers=servers),
     )
     return updated_profile
+
+
+def _require_printable_token(token: str) -> None:
+    if any(not character.isprintable() for character in token):
+        raise ProfileError("token must contain only printable characters")
 
 
 def remove_profile(path: Path, server_id: str) -> ProfileStore:
@@ -389,7 +397,11 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Active server: {store.active_server_id}")
             return
         if args.command == "set-token":
-            token = normalize_token(args.token or getpass.getpass("Shared token: "))
+            token = normalize_token(
+                args.token
+                or os.environ.get("PYVPN_TOKEN")
+                or getpass.getpass("Shared token: ")
+            )
             profile = update_profile_token(path, args.server_id, token)
             print(f"Updated token for server: {profile.server_id}")
             print(f"Token id: {token_identifier(profile.token)}")

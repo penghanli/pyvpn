@@ -18,7 +18,8 @@ powershell -ExecutionPolicy Bypass -File .\install-client.ps1
 不会读取、停止或覆盖旧版系统目录中的安装。
 
 首次安装会询问服务器地址、共享 Token 和证书指纹，初始 `server_id` 为
-`default`。Token 输入时不会显示字符。
+`default`。Token 输入时不会显示字符；旧式 Windows PowerShell 中按 `Ctrl+V`
+时，脚本会自动从剪贴板读取。复制整行 `PYVPN_TOKEN=...` 也会自动提取其值。
 
 ## 连接
 

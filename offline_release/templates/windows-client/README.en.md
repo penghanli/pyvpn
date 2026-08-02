@@ -21,6 +21,9 @@ or overwritten.
 
 The first install asks for the server, shared token, and certificate
 fingerprint. The initial `server_id` is `default`, and token input is hidden.
+In legacy Windows PowerShell, pressing `Ctrl+V` reads the token from the
+clipboard automatically. A copied `PYVPN_TOKEN=...` line is reduced to its
+value as well.
 
 ## Connect
 

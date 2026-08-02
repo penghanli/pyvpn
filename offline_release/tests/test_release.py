@@ -22,13 +22,13 @@ def _load_build_module():
 def test_expected_package_matrix_and_names() -> None:
     build = _load_build_module()
     expected = {
-        "pyvpn-offline-client-windows-x64-0.1.0-r5.zip",
-        "pyvpn-offline-client-linux-x86_64-0.1.0-r5.tar.gz",
-        "pyvpn-offline-server-linux-x86_64-0.1.0-r5.tar.gz",
-        "pyvpn-offline-client-linux-arm64-0.1.0-r5.tar.gz",
-        "pyvpn-offline-server-linux-arm64-0.1.0-r5.tar.gz",
-        "pyvpn-offline-client-macos-x86_64-0.1.0-r5.tar.gz",
-        "pyvpn-offline-client-macos-arm64-0.1.0-r5.tar.gz",
+        "pyvpn-offline-client-windows-x64-0.1.0-r6.zip",
+        "pyvpn-offline-client-linux-x86_64-0.1.0-r6.tar.gz",
+        "pyvpn-offline-server-linux-x86_64-0.1.0-r6.tar.gz",
+        "pyvpn-offline-client-linux-arm64-0.1.0-r6.tar.gz",
+        "pyvpn-offline-server-linux-arm64-0.1.0-r6.tar.gz",
+        "pyvpn-offline-client-macos-x86_64-0.1.0-r6.tar.gz",
+        "pyvpn-offline-client-macos-arm64-0.1.0-r6.tar.gz",
     }
     actual = {
         build._archive_name(target_platform, arch, role)
@@ -124,8 +124,10 @@ def test_generated_client_launchers_avoid_fragile_shell_constructs() -> None:
     assert "`$clientArgs = @(" in windows
     assert "& `$runtimeExe @clientArgs" in windows
     assert "Get-NetRoute @routeQuery" in windows
-    assert "return $CurrentValue.Trim()" in windows
-    assert "return $value.Trim()" in windows
+    assert 'Join-Path $PSScriptRoot "token-input.ps1"' in windows
+    assert "Read-PyVpnSecretToken" in windows
+    assert "pyvpn-client-token-input.ps1" in windows
+    assert 'serverArgs[0] -in @("add", "set-token")' in windows
     assert not any(line.rstrip().endswith("`") for line in windows.splitlines())
 
     for installer in (linux, macos):
@@ -135,6 +137,17 @@ def test_generated_client_launchers_avoid_fragile_shell_constructs() -> None:
         assert 'for bypass_ip in "${BYPASS_IPS[@]}"' not in installer
         assert r'[[ -f "\$ERR_FILE" ]] && tail' not in installer
         assert r'if [[ -f "\$ERR_FILE" ]]; then tail' in installer
+
+
+def test_windows_token_input_handles_legacy_ctrl_v_paste() -> None:
+    helper = (
+        OFFLINE_ROOT / "templates" / "windows-client" / "token-input.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert "Get-PyVpnClipboardText" in helper
+    assert "IndexOf([char]0x16)" in helper
+    assert "PYVPN_TOKEN=" in helper
+    assert "[char]::IsControl" in helper
 
 
 def test_server_status_compares_configured_and_running_token_ids() -> None:
@@ -232,7 +245,7 @@ def test_assemble_all_platform_package(tmp_path: Path) -> None:
 
     all_archive = build.assemble_all(input_dir, output_dir)
 
-    assert all_archive.name == "pyvpn-offline-all-0.1.0-r5.zip"
+    assert all_archive.name == "pyvpn-offline-all-0.1.0-r6.zip"
     assert (output_dir / "SHA256SUMS").is_file()
     assert len(list(output_dir.iterdir())) == 9
     build.verify_archive(all_archive)

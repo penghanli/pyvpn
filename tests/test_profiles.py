@@ -93,7 +93,7 @@ def test_profile_token_is_trimmed_and_can_be_updated_without_resetting_options(
     assert selected_profile(path).token == "new-token"
 
 
-def test_profile_validation_rejects_unsafe_values() -> None:
+def test_profile_validation_rejects_unsafe_values(tmp_path: Path) -> None:
     with pytest.raises(ProfileError):
         make_profile("bad id", "vpn.example.com")
     with pytest.raises(ProfileError):
@@ -104,6 +104,42 @@ def test_profile_validation_rejects_unsafe_values() -> None:
             token="token",
             cert_fingerprint="sha256:bad",
         )
+    unsafe_profile = ServerProfile(
+        server_id="valid",
+        server_host="vpn.example.com",
+        control_port=8443,
+        token="\x16",
+        cert_fingerprint=FINGERPRINT,
+    )
+    with pytest.raises(ProfileError, match="printable"):
+        add_profile(tmp_path / "servers.json", unsafe_profile)
+
+
+def test_legacy_control_character_token_can_be_repaired(tmp_path: Path) -> None:
+    path = tmp_path / "servers.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "active_server_id": "default",
+                "servers": {
+                    "default": {
+                        "server_host": "vpn.example.com",
+                        "control_port": 8443,
+                        "token": "\x16",
+                        "cert_fingerprint": FINGERPRINT,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert selected_profile(path).token == "\x16"
+    updated = update_profile_token(path, "default", "replacement")
+
+    assert updated.token == "replacement"
+    assert selected_profile(path).token == "replacement"
 
 
 def test_profile_store_rejects_unknown_active_server(tmp_path: Path) -> None:
@@ -247,3 +283,20 @@ def test_profile_cli_set_token_prompts_and_preserves_profile(
     output = capsys.readouterr().out
     assert "Updated token for server: default" in output
     assert "Token id:" in output
+
+
+def test_profile_cli_set_token_accepts_environment_token(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "servers.json"
+    add_profile(path, make_profile("default", "vpn.example.com"), make_active=True)
+    monkeypatch.setenv("PYVPN_TOKEN", "  environment-token  ")
+    monkeypatch.setattr(
+        profiles.getpass,
+        "getpass",
+        lambda prompt: pytest.fail("set-token unexpectedly prompted"),
+    )
+
+    profiles.main(["--file", str(path), "set-token", "default"])
+
+    assert selected_profile(path).token == "environment-token"

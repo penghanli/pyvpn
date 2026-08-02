@@ -13,6 +13,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$tokenInputSource = Join-Path $PSScriptRoot "token-input.ps1"
+if (-not (Test-Path -LiteralPath $tokenInputSource -PathType Leaf)) {
+    throw "The package is missing token-input.ps1."
+}
+. $tokenInputSource
 
 function Assert-Admin {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -58,23 +63,6 @@ function Read-RequiredValue([string]$Label, [string]$CurrentValue) {
     $value = Read-Host $Label
     if ([string]::IsNullOrWhiteSpace($value)) {
         throw "$Label is required."
-    }
-    return $value.Trim()
-}
-
-function Read-SecretValue([string]$CurrentValue) {
-    if (-not [string]::IsNullOrWhiteSpace($CurrentValue)) {
-        return $CurrentValue.Trim()
-    }
-    $secure = Read-Host "Shared token" -AsSecureString
-    $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-    try {
-        $value = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
-    } finally {
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)
-    }
-    if ([string]::IsNullOrWhiteSpace($value)) {
-        throw "Shared token is required."
     }
     return $value.Trim()
 }
@@ -265,7 +253,7 @@ $selectExistingProfile = $profilesExist -and (-not $writeProfile) -and
     $PSBoundParameters.ContainsKey("ServerId")
 if ($writeProfile) {
     $ServerHost = Read-RequiredValue "Server host or IP" $ServerHost
-    $Token = Read-SecretValue $Token
+    $Token = Read-PyVpnSecretToken $Token
     $CertFingerprint = Read-RequiredValue "Certificate fingerprint (sha256:...)" $CertFingerprint
     if ($ServerId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') {
         throw "ServerId must contain only letters, digits, dots, underscores, or hyphens."
@@ -284,6 +272,7 @@ $downScript = Join-Path $InstallDir "pyvpn-client-down.ps1"
 $statusScript = Join-Path $InstallDir "pyvpn-client-status.ps1"
 $serversScript = Join-Path $InstallDir "pyvpn-client-servers.ps1"
 $switchScript = Join-Path $InstallDir "pyvpn-client-switch.ps1"
+$tokenInputScript = Join-Path $InstallDir "pyvpn-client-token-input.ps1"
 $pidPath = Join-Path $ConfigDir "client.pid"
 $logPath = Join-Path $ConfigDir "client.log"
 $errLogPath = Join-Path $ConfigDir "client.err.log"
@@ -308,7 +297,8 @@ foreach ($path in @(
     $downScript,
     $statusScript,
     $serversScript,
-    $switchScript
+    $switchScript,
+    $tokenInputScript
 )) {
     Backup-File $path $backupDir $backupEntries
 }
@@ -325,6 +315,7 @@ try {
 
     New-Item -ItemType Directory -Force -Path $InstallDir, $ConfigDir | Out-Null
     Protect-LocalInstall $InstallDir
+    Copy-Item -Force -LiteralPath $tokenInputSource -Destination $tokenInputScript
     Remove-Item -Recurse -Force -LiteralPath $runtimeNew -ErrorAction SilentlyContinue
     Copy-Item -Recurse -LiteralPath $payloadDir -Destination $runtimeNew
     $newExe = Join-Path $runtimeNew "pyvpn-client.exe"
@@ -528,8 +519,33 @@ if (Test-Path `$errLogPath) { Get-Content `$errLogPath -Tail 40 }
 
 @"
 `$ErrorActionPreference = "Stop"
-& $(Quote-PowerShellString $runtimeExe) servers --file $(Quote-PowerShellString $profilesPath) @args
-exit `$LASTEXITCODE
+. $(Quote-PowerShellString $tokenInputScript)
+`$runtimeExe = $(Quote-PowerShellString $runtimeExe)
+`$profilesPath = $(Quote-PowerShellString $profilesPath)
+`$serverArgs = @(`$args)
+`$needsToken = `$serverArgs.Count -gt 0 -and
+  `$serverArgs[0] -in @("add", "set-token") -and
+  `$serverArgs -notcontains "--token" -and
+  [string]::IsNullOrWhiteSpace(`$env:PYVPN_TOKEN)
+`$oldToken = `$env:PYVPN_TOKEN
+`$injectedToken = `$false
+try {
+  if (`$needsToken) {
+    `$env:PYVPN_TOKEN = Read-PyVpnSecretToken
+    `$injectedToken = `$true
+  }
+  & `$runtimeExe servers --file `$profilesPath @serverArgs
+  `$exitCode = `$LASTEXITCODE
+} finally {
+  if (`$injectedToken) {
+    if (`$null -eq `$oldToken) {
+      Remove-Item Env:PYVPN_TOKEN -ErrorAction SilentlyContinue
+    } else {
+      `$env:PYVPN_TOKEN = `$oldToken
+    }
+  }
+}
+exit `$exitCode
 "@ | Set-Content -Encoding UTF8 -Path $serversScript
 
 @"

@@ -39,16 +39,39 @@ jobs:
       - name: Parse PowerShell installers
         shell: powershell
         run: |
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path "offline_release/templates/windows-client/install-client.ps1"),
-            [ref]$tokens,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Error $_.Message }
-            exit 1
+          foreach ($path in @(
+            "offline_release/templates/windows-client/install-client.ps1",
+            "offline_release/templates/windows-client/token-input.ps1"
+          )) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "$path`: $($_.Message)" }
+              exit 1
+            }
+          }
+      - name: Test legacy Ctrl+V token input
+        shell: powershell
+        run: |
+          . ./offline_release/templates/windows-client/token-input.ps1
+          function Get-PyVpnClipboardText { return "  PYVPN_TOKEN=clipboard_test_token  " }
+          $actual = Resolve-PyVpnTokenInput ([string][char]0x16)
+          if ($actual -ne "clipboard_test_token") {
+            throw "Ctrl+V clipboard fallback returned an unexpected token."
+          }
+          $rejected = $false
+          try {
+            Normalize-PyVpnTokenInput ("bad" + [char]0x01 + "token") | Out-Null
+          } catch {
+            $rejected = $true
+          }
+          if (-not $rejected) {
+            throw "Token input accepted an unsupported control character."
           }
       - name: Run tests
         run: python -m pytest tests offline_release/tests
@@ -118,7 +141,7 @@ jobs:
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer `
             -ServerId "ci-primary" `
             -ServerHost "203.0.113.10" `
-            -Token "offline_test_token" `
+            -Token "PYVPN_TOKEN=offline_test_token" `
             -CertFingerprint $fingerprint
           if ($LASTEXITCODE -ne 0) { throw "Fresh offline install failed." }
           $profilesPath = Join-Path $configDir "servers.json"
@@ -138,6 +161,19 @@ jobs:
               -not $profileStore.servers.'ci-backup') {
             throw "Fresh install did not create the expected server profiles."
           }
+          if ($profileStore.servers.'ci-primary'.token -ne "offline_test_token") {
+            throw "Fresh install did not normalize the PYVPN_TOKEN prefix."
+          }
+          $env:PYVPN_TOKEN = "wrapper_environment_token"
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $serversScript `
+            set-token ci-primary
+          $setTokenExit = $LASTEXITCODE
+          Remove-Item Env:PYVPN_TOKEN
+          if ($setTokenExit -ne 0) { throw "Could not set a token from the environment." }
+          $profileStore = Get-Content -Raw $profilesPath | ConvertFrom-Json
+          if ($profileStore.servers.'ci-primary'.token -ne "wrapper_environment_token") {
+            throw "Generated servers launcher did not preserve the environment token."
+          }
           $configHash = (Get-FileHash -Algorithm SHA256 $profilesPath).Hash
 
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer
@@ -148,7 +184,7 @@ jobs:
           if (-not (Test-Path (Join-Path $installDir "runtime.previous"))) {
             throw "Offline upgrade did not retain the previous runtime."
           }
-          $launcherNames = @("start", "up", "down", "status", "servers", "switch")
+          $launcherNames = @("start", "up", "down", "status", "servers", "switch", "token-input")
           foreach ($launcherName in $launcherNames) {
             $launcher = Join-Path $installDir "pyvpn-client-$launcherName.ps1"
             if (-not (Test-Path $launcher)) {
