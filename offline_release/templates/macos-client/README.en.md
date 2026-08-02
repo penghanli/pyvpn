@@ -38,6 +38,7 @@ Add a server, list latency, select a server, or switch immediately:
 sudo ./pyvpn-client/pyvpn-client-servers add aliyun-sg \
   --server-host <server-host> \
   --cert-fingerprint 'sha256:<server-fingerprint>'
+sudo ./pyvpn-client/pyvpn-client-servers set-token
 sudo ./pyvpn-client/pyvpn-client-servers show
 sudo ./pyvpn-client/pyvpn-client-servers list
 sudo ./pyvpn-client/pyvpn-client-servers use aliyun-sg
@@ -45,6 +46,8 @@ sudo ./pyvpn-client/pyvpn-client-switch aliyun-sg
 ```
 
 Token input is hidden when `--token` is omitted and normal output masks it.
+`set-token` updates only the active token, and `token_id` can be compared with
+server status.
 Profiles are stored in `pyvpn-client/config/servers.json`. This is a sudo utun
 CLI client, not a native NetworkExtension app. Append `--replace` to the add
 command when details for the same `server_id` change.

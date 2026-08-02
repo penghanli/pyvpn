@@ -36,13 +36,15 @@ sudo ./pyvpn-client/pyvpn-client-status
 sudo ./pyvpn-client/pyvpn-client-servers add aliyun-sg \
   --server-host <server-host> \
   --cert-fingerprint 'sha256:<server-fingerprint>'
+sudo ./pyvpn-client/pyvpn-client-servers set-token
 sudo ./pyvpn-client/pyvpn-client-servers show
 sudo ./pyvpn-client/pyvpn-client-servers list
 sudo ./pyvpn-client/pyvpn-client-servers use aliyun-sg
 sudo ./pyvpn-client/pyvpn-client-switch aliyun-sg
 ```
 
-省略 `--token` 时 Token 会隐藏输入，正常输出也只显示遮盖值。节点文件是
+省略 `--token` 时 Token 会隐藏输入，正常输出也只显示遮盖值；`set-token` 只更新
+当前节点 Token，`token_id` 可与服务端状态对比。节点文件是
 `pyvpn-client/config/servers.json`。这是需要 `sudo` 的 utun 命令行客户端，
 不是 NetworkExtension 图形 App。同一个 `server_id` 的信息有变化时，在添加命令
 末尾加 `--replace`。

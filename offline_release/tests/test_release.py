@@ -22,13 +22,13 @@ def _load_build_module():
 def test_expected_package_matrix_and_names() -> None:
     build = _load_build_module()
     expected = {
-        "pyvpn-offline-client-windows-x64-0.1.0-r4.zip",
-        "pyvpn-offline-client-linux-x86_64-0.1.0-r4.tar.gz",
-        "pyvpn-offline-server-linux-x86_64-0.1.0-r4.tar.gz",
-        "pyvpn-offline-client-linux-arm64-0.1.0-r4.tar.gz",
-        "pyvpn-offline-server-linux-arm64-0.1.0-r4.tar.gz",
-        "pyvpn-offline-client-macos-x86_64-0.1.0-r4.tar.gz",
-        "pyvpn-offline-client-macos-arm64-0.1.0-r4.tar.gz",
+        "pyvpn-offline-client-windows-x64-0.1.0-r5.zip",
+        "pyvpn-offline-client-linux-x86_64-0.1.0-r5.tar.gz",
+        "pyvpn-offline-server-linux-x86_64-0.1.0-r5.tar.gz",
+        "pyvpn-offline-client-linux-arm64-0.1.0-r5.tar.gz",
+        "pyvpn-offline-server-linux-arm64-0.1.0-r5.tar.gz",
+        "pyvpn-offline-client-macos-x86_64-0.1.0-r5.tar.gz",
+        "pyvpn-offline-client-macos-arm64-0.1.0-r5.tar.gz",
     }
     actual = {
         build._archive_name(target_platform, arch, role)
@@ -124,14 +124,32 @@ def test_generated_client_launchers_avoid_fragile_shell_constructs() -> None:
     assert "`$clientArgs = @(" in windows
     assert "& `$runtimeExe @clientArgs" in windows
     assert "Get-NetRoute @routeQuery" in windows
+    assert "return $CurrentValue.Trim()" in windows
+    assert "return $value.Trim()" in windows
     assert not any(line.rstrip().endswith("`") for line in windows.splitlines())
 
     for installer in (linux, macos):
+        assert 'TOKEN="$(trim_outer_whitespace "$TOKEN")"' in installer
         assert r'ARGS=(--profiles "\$PROFILES_PATH" --stop-file "\$STOP_FILE"' in installer
         assert 'for bypass_ip in "${BYPASS_IPS[@]-}"' in installer
         assert 'for bypass_ip in "${BYPASS_IPS[@]}"' not in installer
         assert r'[[ -f "\$ERR_FILE" ]] && tail' not in installer
         assert r'if [[ -f "\$ERR_FILE" ]]; then tail' in installer
+
+
+def test_server_status_compares_configured_and_running_token_ids() -> None:
+    installer = (
+        OFFLINE_ROOT / "templates" / "linux-server" / "install-server.sh"
+    ).read_text(encoding="utf-8")
+    tools = (OFFLINE_ROOT / "entrypoints" / "server_tools.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'TOKEN="$(trim_outer_whitespace "$TOKEN")"' in installer
+    assert "configured token_id:" in installer
+    assert "running token_id:" in installer
+    assert "token-id --env-file" in tools
+    assert "token-id --pid" in tools
 
 
 def test_installers_validate_supported_architectures() -> None:
@@ -214,7 +232,7 @@ def test_assemble_all_platform_package(tmp_path: Path) -> None:
 
     all_archive = build.assemble_all(input_dir, output_dir)
 
-    assert all_archive.name == "pyvpn-offline-all-0.1.0-r4.zip"
+    assert all_archive.name == "pyvpn-offline-all-0.1.0-r5.zip"
     assert (output_dir / "SHA256SUMS").is_file()
     assert len(list(output_dir.iterdir())) == 9
     build.verify_archive(all_archive)

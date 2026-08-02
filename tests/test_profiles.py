@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from pyvpn import client, profiles
+from pyvpn.errors import AuthenticationError
 from pyvpn.profiles import (
     ProfileError,
     ServerProfile,
@@ -16,6 +17,7 @@ from pyvpn.profiles import (
     save_profile_store,
     select_profile,
     selected_profile,
+    update_profile_token,
 )
 
 
@@ -60,6 +62,35 @@ def test_profile_store_is_valid_json_and_replaces_atomically(tmp_path: Path) -> 
     assert raw["active_server_id"] == "default"
     assert raw["servers"]["default"]["server_host"] == "203.0.113.20"
     assert list(path.parent.glob("*.tmp")) == []
+
+
+def test_profile_token_is_trimmed_and_can_be_updated_without_resetting_options(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "servers.json"
+    profile = ServerProfile(
+        server_id="default",
+        server_host="203.0.113.10",
+        control_port=9443,
+        token="  old-token\r\n",
+        cert_fingerprint=FINGERPRINT,
+        tun_name="custom-tun",
+        mtu=1400,
+        no_dns=True,
+        bypass_ips=("198.51.100.10",),
+    )
+    add_profile(path, profile, make_active=True)
+
+    updated = update_profile_token(path, None, "  new-token  ")
+
+    assert updated.token == "new-token"
+    assert updated.server_host == profile.server_host
+    assert updated.control_port == 9443
+    assert updated.tun_name == "custom-tun"
+    assert updated.mtu == 1400
+    assert updated.no_dns is True
+    assert updated.bypass_ips == ("198.51.100.10",)
+    assert selected_profile(path).token == "new-token"
 
 
 def test_profile_validation_rejects_unsafe_values() -> None:
@@ -169,6 +200,19 @@ def test_legacy_direct_client_arguments_still_work(monkeypatch) -> None:
     assert config.manage_dns is True
 
 
+def test_client_main_prints_authentication_errors_without_a_traceback(
+    monkeypatch,
+) -> None:
+    async def fail_authentication():
+        raise AuthenticationError("authentication failed (client token_id=abc123)")
+
+    monkeypatch.setattr(client, "async_main", fail_authentication)
+    monkeypatch.setattr(client.sys, "argv", ["pyvpn-client"])
+
+    with pytest.raises(SystemExit, match="client token_id=abc123"):
+        client.main()
+
+
 def test_profile_cli_lists_latency_and_masks_token(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
@@ -187,3 +231,19 @@ def test_profile_cli_lists_latency_and_masks_token(
     assert "server_id: hk" in shown
     assert "token-hk" not in shown
     assert "token:" in shown
+    assert "token_id:" in shown
+
+
+def test_profile_cli_set_token_prompts_and_preserves_profile(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    path = tmp_path / "servers.json"
+    add_profile(path, make_profile("default", "vpn.example.com"), make_active=True)
+    monkeypatch.setattr(profiles.getpass, "getpass", lambda prompt: "  replacement  ")
+
+    profiles.main(["--file", str(path), "set-token"])
+
+    assert selected_profile(path).token == "replacement"
+    output = capsys.readouterr().out
+    assert "Updated token for server: default" in output
+    assert "Token id:" in output

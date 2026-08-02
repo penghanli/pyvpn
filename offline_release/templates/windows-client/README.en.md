@@ -44,7 +44,14 @@ powershell -ExecutionPolicy Bypass -File ".\pyvpn-client\pyvpn-client-servers.ps
 ```
 
 Append `--replace` to that command when the address, token, or fingerprint for
-the same `server_id` changes. Show the active server details:
+the same `server_id` changes. Update only the active server token without
+changing its other options:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\pyvpn-client\pyvpn-client-servers.ps1" set-token
+```
+
+Show the active server details:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\pyvpn-client\pyvpn-client-servers.ps1" show
@@ -69,5 +76,6 @@ powershell -ExecutionPolicy Bypass -File ".\pyvpn-client\pyvpn-client-switch.ps1
 ```
 
 Profiles are stored in `pyvpn-client\config\servers.json`; tokens are masked in
-normal output. Run installation and client commands as administrator. Do not
+normal output. `token_id` is a short identifier for comparison with server
+status, not the token. Run installation and client commands as administrator. Do not
 move or delete the installed `pyvpn-client` directory.

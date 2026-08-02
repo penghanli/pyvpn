@@ -35,6 +35,13 @@ Options:
 EOF
 }
 
+trim_outer_whitespace() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --server-id) SERVER_ID="${2:-}"; SERVER_ID_SET="1"; shift 2 ;;
@@ -152,6 +159,7 @@ if [[ "$WRITE_PROFILE" == "1" ]]; then
     read -r -s -p "Shared token: " TOKEN
     echo
   fi
+  TOKEN="$(trim_outer_whitespace "$TOKEN")"
   if [[ -z "$CERT_FINGERPRINT" ]]; then
     read -r -p "Certificate fingerprint (sha256:...): " CERT_FINGERPRINT
   fi

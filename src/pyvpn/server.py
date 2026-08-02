@@ -9,10 +9,11 @@ import os
 import secrets
 import signal
 import ssl
+import sys
 import time
 from dataclasses import dataclass, field
 
-from .auth import token_matches
+from .auth import token_identifier, token_matches
 from .constants import (
     CONTROL_VERSION,
     DEFAULT_CLIENT_SUBNET,
@@ -174,6 +175,14 @@ class VpnServer:
 
             supplied_token = str(hello.get("token", ""))
             if not token_matches(self.config.token, supplied_token):
+                print(
+                    "authentication failed: "
+                    f"peer={peer} "
+                    f"expected_token_id={token_identifier(self.config.token)} "
+                    f"supplied_token_id={token_identifier(supplied_token)}",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 await self._send_error(writer, "authentication failed")
                 return
 

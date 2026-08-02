@@ -34,7 +34,13 @@ sudo ./pyvpn-client/pyvpn-client-servers add aliyun-sg \
 ```
 
 同一个 `server_id` 的信息有变化时，在上述命令末尾加 `--replace`。打印当前节点
-详情使用：
+Token 可单独更新，不会重置地址、指纹或其他选项：
+
+```bash
+sudo ./pyvpn-client/pyvpn-client-servers set-token
+```
+
+打印当前节点详情使用：
 
 ```bash
 sudo ./pyvpn-client/pyvpn-client-servers show
@@ -48,5 +54,6 @@ sudo ./pyvpn-client/pyvpn-client-servers use aliyun-sg
 sudo ./pyvpn-client/pyvpn-client-switch aliyun-sg
 ```
 
-节点保存在 `pyvpn-client/config/servers.json`，Token 默认遮盖显示。客户端只需
+节点保存在 `pyvpn-client/config/servers.json`，Token 默认遮盖显示，`token_id`
+用于和服务端状态对比。客户端只需
 出站访问服务端 TCP `8443` 和 UDP `8444`。不要移动或删除安装后的目录。

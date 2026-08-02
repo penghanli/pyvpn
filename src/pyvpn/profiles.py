@@ -9,9 +9,11 @@ import socket
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable
+
+from .auth import normalize_token, token_identifier
 
 
 PROFILE_STORE_VERSION = 1
@@ -36,6 +38,7 @@ class ServerProfile:
     bypass_ips: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "token", normalize_token(self.token))
         if not SERVER_ID_PATTERN.fullmatch(self.server_id):
             raise ProfileError(
                 "server_id must start with a letter or digit and contain only "
@@ -193,6 +196,25 @@ def select_profile(path: Path, server_id: str) -> ProfileStore:
     return updated
 
 
+def update_profile_token(path: Path, server_id: str | None, token: str) -> ServerProfile:
+    store = load_profile_store(path)
+    selected_id = server_id or store.active_server_id
+    if selected_id is None:
+        raise ProfileError("no active server is selected; run the servers use command")
+    try:
+        profile = store.servers[selected_id]
+    except KeyError as exc:
+        raise ProfileError(f"unknown server_id: {selected_id}") from exc
+    updated_profile = replace(profile, token=token)
+    servers = dict(store.servers)
+    servers[selected_id] = updated_profile
+    save_profile_store(
+        path,
+        ProfileStore(active_server_id=store.active_server_id, servers=servers),
+    )
+    return updated_profile
+
+
 def remove_profile(path: Path, server_id: str) -> ProfileStore:
     store = load_profile_store(path)
     if server_id not in store.servers:
@@ -241,6 +263,7 @@ def _profile_lines(profile: ServerProfile, *, active: bool, show_token: bool) ->
     yield f"server: {profile.server_host}:{profile.control_port}"
     yield f"cert_fingerprint: {profile.cert_fingerprint}"
     yield f"token: {token_value}"
+    yield f"token_id: {token_identifier(profile.token)}"
     yield f"tun: {profile.tun_name}"
     yield f"mtu: {profile.mtu}"
     yield f"dns: {'disabled' if profile.no_dns else 'enabled'}"
@@ -275,6 +298,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     use_parser = subparsers.add_parser("use", help="Select the active server")
     use_parser.add_argument("server_id")
+
+    token_parser = subparsers.add_parser(
+        "set-token", help="Update only the shared token for a saved server"
+    )
+    token_parser.add_argument("server_id", nargs="?")
+    token_parser.add_argument("--token")
 
     remove_parser = subparsers.add_parser("remove", help="Remove a saved server")
     remove_parser.add_argument("server_id")
@@ -339,7 +368,11 @@ def main(argv: list[str] | None = None) -> None:
             )
             return
         if args.command == "add":
-            token = args.token or os.environ.get("PYVPN_TOKEN") or getpass.getpass("Shared token: ")
+            token = normalize_token(
+                args.token
+                or os.environ.get("PYVPN_TOKEN")
+                or getpass.getpass("Shared token: ")
+            )
             profile = ServerProfile(
                 server_id=args.server_id,
                 server_host=args.server_host,
@@ -354,6 +387,12 @@ def main(argv: list[str] | None = None) -> None:
             store = add_profile(path, profile, replace=args.replace, make_active=args.use)
             print(f"Saved server: {profile.server_id} ({profile.server_host}:{profile.control_port})")
             print(f"Active server: {store.active_server_id}")
+            return
+        if args.command == "set-token":
+            token = normalize_token(args.token or getpass.getpass("Shared token: "))
+            profile = update_profile_token(path, args.server_id, token)
+            print(f"Updated token for server: {profile.server_id}")
+            print(f"Token id: {token_identifier(profile.token)}")
             return
         if args.command == "use":
             store = select_profile(path, args.server_id)

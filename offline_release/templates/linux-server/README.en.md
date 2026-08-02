@@ -57,5 +57,8 @@ sudo pyvpn-server-logs
 sudo pyvpn-server-restart
 ```
 
+`pyvpn-server-status` prints token IDs for both `server.env` and the running
+process. They must match, and the client `show` token ID must match them too.
+
 The complete package, architecture, TUN device, and NAT tools are verified
 before system files are changed.

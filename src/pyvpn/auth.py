@@ -10,6 +10,16 @@ def token_matches(expected: str, supplied: str) -> bool:
     return hmac.compare_digest(expected.encode("utf-8"), supplied.encode("utf-8"))
 
 
+def normalize_token(value: str) -> str:
+    """Remove accidental leading and trailing whitespace from a token."""
+    return value.strip()
+
+
+def token_identifier(value: str) -> str:
+    """Return a short diagnostic identifier for comparing configured tokens."""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
 def certificate_fingerprint(cert_der: bytes) -> str:
     return "sha256:" + hashlib.sha256(cert_der).hexdigest()
 

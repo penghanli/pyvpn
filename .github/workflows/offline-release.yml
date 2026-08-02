@@ -72,6 +72,13 @@ jobs:
           & $clientExe servers --file $profiles add ci-primary `
             --server-host 203.0.113.10 --cert-fingerprint $fingerprint --use
           Remove-Item Env:PYVPN_TOKEN
+          & $clientExe servers --file $profiles set-token ci-primary `
+            --token "  updated_test_token  "
+          $store = Get-Content -Raw -LiteralPath $profiles | ConvertFrom-Json
+          $stored = $store.servers.PSObject.Properties["ci-primary"].Value.token
+          if ($stored -ne "updated_test_token") {
+            throw "Frozen client did not normalize the updated token."
+          }
           & $clientExe servers --file $profiles list --no-probe
       - name: Test fresh install, upgrade, and damaged package
         shell: powershell
@@ -400,12 +407,21 @@ jobs:
           env -u PYTHONHOME -u PYTHONPATH "$CLIENT_ROOT/payload/pyvpn-client/pyvpn-client" --help
           env -u PYTHONHOME -u PYTHONPATH "$SERVER_ROOT/payload/pyvpn-server/pyvpn-server" --help
           env -u PYTHONHOME -u PYTHONPATH "$SERVER_ROOT/payload/pyvpn-tools/pyvpn-tools" --help
+          TOKEN_ENV="/tmp/pyvpn-token-env-${{ matrix.arch }}"
+          printf 'PYVPN_TOKEN=offline_test_token\n' > "$TOKEN_ENV"
+          EXPECTED_TOKEN_ID="$(printf %s offline_test_token | sha256sum | cut -c1-12)"
+          ACTUAL_TOKEN_ID="$("$SERVER_ROOT/payload/pyvpn-tools/pyvpn-tools" token-id --env-file "$TOKEN_ENV")"
+          [[ "$ACTUAL_TOKEN_ID" == "$EXPECTED_TOKEN_ID" ]]
           PROFILES="/tmp/pyvpn-frozen-servers-${{ matrix.arch }}.json"
           env PYVPN_TOKEN=offline_test_token \
             "$CLIENT_ROOT/payload/pyvpn-client/pyvpn-client" \
             servers --file "$PROFILES" add ci-primary \
             --server-host 203.0.113.10 \
             --cert-fingerprint "sha256:$(printf '0%.0s' {1..64})" --use
+          "$CLIENT_ROOT/payload/pyvpn-client/pyvpn-client" \
+            servers --file "$PROFILES" set-token ci-primary \
+            --token "  updated_test_token  "
+          grep -F '"token": "updated_test_token"' "$PROFILES"
           "$CLIENT_ROOT/payload/pyvpn-client/pyvpn-client" \
             servers --file "$PROFILES" list --no-probe
       - name: Test missing host-component preflight
@@ -576,6 +592,10 @@ jobs:
             servers --file "$PROFILES" add ci-primary \
             --server-host 203.0.113.10 \
             --cert-fingerprint "sha256:$(printf '0%.0s' {1..64})" --use
+          "$PACKAGE_ROOT/payload/pyvpn-client/pyvpn-client" \
+            servers --file "$PROFILES" set-token ci-primary \
+            --token "  updated_test_token  "
+          grep -F '"token": "updated_test_token"' "$PROFILES"
           "$PACKAGE_ROOT/payload/pyvpn-client/pyvpn-client" \
             servers --file "$PROFILES" list --no-probe
       - name: Install and validate generated macOS helpers

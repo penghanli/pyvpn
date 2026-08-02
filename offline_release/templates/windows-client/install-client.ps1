@@ -64,7 +64,7 @@ function Read-RequiredValue([string]$Label, [string]$CurrentValue) {
 
 function Read-SecretValue([string]$CurrentValue) {
     if (-not [string]::IsNullOrWhiteSpace($CurrentValue)) {
-        return $CurrentValue
+        return $CurrentValue.Trim()
     }
     $secure = Read-Host "Shared token" -AsSecureString
     $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
@@ -76,7 +76,7 @@ function Read-SecretValue([string]$CurrentValue) {
     if ([string]::IsNullOrWhiteSpace($value)) {
         throw "Shared token is required."
     }
-    return $value
+    return $value.Trim()
 }
 
 function Invoke-ClientHelper([string]$Path, [string[]]$Arguments = @()) {

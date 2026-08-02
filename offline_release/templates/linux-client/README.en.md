@@ -38,7 +38,14 @@ sudo ./pyvpn-client/pyvpn-client-servers add aliyun-sg \
 ```
 
 Append `--replace` when the address, token, or fingerprint for the same
-`server_id` changes. Print the active server details with:
+`server_id` changes. Update only the active token without resetting other
+options:
+
+```bash
+sudo ./pyvpn-client/pyvpn-client-servers set-token
+```
+
+Print the active server details with:
 
 ```bash
 sudo ./pyvpn-client/pyvpn-client-servers show
@@ -53,5 +60,6 @@ sudo ./pyvpn-client/pyvpn-client-switch aliyun-sg
 ```
 
 Profiles are stored in `pyvpn-client/config/servers.json`; tokens are masked in
-normal output. The client only needs outbound access to server TCP `8443` and
+normal output, and `token_id` can be compared with server status. The client
+only needs outbound access to server TCP `8443` and
 UDP `8444`. Do not move or delete the installed directory.

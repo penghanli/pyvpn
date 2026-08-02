@@ -42,7 +42,13 @@ powershell -ExecutionPolicy Bypass -File ".\pyvpn-client\pyvpn-client-servers.ps
 ```
 
 同一个 `server_id` 的地址、Token 或指纹有变化时，在上述命令末尾加
-`--replace`。查看当前节点详情：
+`--replace`。只更新当前节点 Token，不改变地址、指纹或其他选项：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\pyvpn-client\pyvpn-client-servers.ps1" set-token
+```
+
+查看当前节点详情：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\pyvpn-client\pyvpn-client-servers.ps1" show
@@ -66,6 +72,7 @@ powershell -ExecutionPolicy Bypass -File ".\pyvpn-client\pyvpn-client-servers.ps
 powershell -ExecutionPolicy Bypass -File ".\pyvpn-client\pyvpn-client-switch.ps1" aliyun-sg
 ```
 
-节点保存在 `pyvpn-client\config\servers.json`，Token 默认只以遮盖形式打印。安装、
+节点保存在 `pyvpn-client\config\servers.json`，Token 默认只以遮盖形式打印；
+`token_id` 是用于和服务端状态对比的短标识，不是 Token。安装、
 连接、断开和节点管理均应在管理员 PowerShell 中运行。不要移动或删除安装后的
 `pyvpn-client` 目录。

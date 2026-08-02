@@ -14,7 +14,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .auth import certificate_fingerprint, normalize_fingerprint
+from .auth import certificate_fingerprint, normalize_fingerprint, token_identifier
 from .constants import CONTROL_VERSION, DEFAULT_MTU, PACKET_TYPE_DATA, PACKET_TYPE_KEEPALIVE
 from .crypto import SessionKeys, TunnelCipher
 from .errors import AuthenticationError, ProtocolError
@@ -108,7 +108,13 @@ class VpnClient:
             await self._send_hello(writer)
             accept = await read_frame(reader)
             if accept.get("type") == "error":
-                raise AuthenticationError(str(accept.get("message", "server rejected client")))
+                message = str(accept.get("message", "server rejected client"))
+                if message == "authentication failed":
+                    message = (
+                        "authentication failed: server rejected the shared token "
+                        f"(client token_id={token_identifier(self.config.token)})"
+                    )
+                raise AuthenticationError(message)
             self.session = self._parse_accept(accept)
             print(
                 "control session accepted: "
@@ -419,7 +425,10 @@ def main() -> None:
 
         profiles_main(sys.argv[2:])
         return
-    asyncio.run(async_main())
+    try:
+        asyncio.run(async_main())
+    except AuthenticationError as exc:
+        raise SystemExit(str(exc)) from None
 
 
 if __name__ == "__main__":

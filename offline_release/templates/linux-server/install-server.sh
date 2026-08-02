@@ -34,6 +34,13 @@ Options:
 EOF
 }
 
+trim_outer_whitespace() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --public-host) PUBLIC_HOST="${2:-}"; shift 2 ;;
@@ -155,6 +162,7 @@ if [[ -z "$TOKEN" && -t 0 ]]; then
   read -r -s -p "Shared token (leave empty to generate): " TOKEN
   echo
 fi
+TOKEN="$(trim_outer_whitespace "$TOKEN")"
 
 validate_env_value() {
   local name="$1"
@@ -366,11 +374,27 @@ cat > /usr/local/bin/pyvpn-server-restart <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 systemctl restart pyvpn-server.service
-systemctl --no-pager --full status pyvpn-server.service
+exec /usr/local/bin/pyvpn-server-status
 EOF
-cat > /usr/local/bin/pyvpn-server-status <<'EOF'
+TOOLS_EXE_Q="$(printf '%q' "$TOOLS_EXE")"
+ENV_PATH_Q="$(printf '%q' "$ENV_PATH")"
+cat > /usr/local/bin/pyvpn-server-status <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+TOOLS_EXE=$TOOLS_EXE_Q
+ENV_PATH=$ENV_PATH_Q
+CONFIGURED_TOKEN_ID="\$("\$TOOLS_EXE" token-id --env-file "\$ENV_PATH")"
+MAIN_PID="\$(systemctl show --property MainPID --value pyvpn-server.service)"
+echo "configured token_id: \$CONFIGURED_TOKEN_ID"
+if [[ "\$MAIN_PID" =~ ^[1-9][0-9]*\$ ]]; then
+  RUNNING_TOKEN_ID="\$("\$TOOLS_EXE" token-id --pid "\$MAIN_PID")"
+  echo "running token_id:    \$RUNNING_TOKEN_ID"
+  if [[ "\$CONFIGURED_TOKEN_ID" != "\$RUNNING_TOKEN_ID" ]]; then
+    echo "WARNING: restart pyvpn-server; the running token differs from server.env." >&2
+  fi
+else
+  echo "running token_id:    unavailable (service is not running)"
+fi
 systemctl --no-pager --full status pyvpn-server.service
 EOF
 cat > /usr/local/bin/pyvpn-server-logs <<'EOF'
