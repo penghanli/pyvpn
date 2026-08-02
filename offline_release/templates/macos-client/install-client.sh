@@ -284,7 +284,7 @@ if [[ "$WRITE_PROFILE" == "1" ]]; then
     --mtu "$MTU"
     --replace --use
   )
-  for bypass_ip in "${BYPASS_IPS[@]}"; do
+  for bypass_ip in "${BYPASS_IPS[@]-}"; do
     [[ -z "$bypass_ip" ]] || PROFILE_ARGS+=(--bypass-ip "$bypass_ip")
   done
   if [[ "$NO_DNS" == "1" ]]; then PROFILE_ARGS+=(--no-dns); fi

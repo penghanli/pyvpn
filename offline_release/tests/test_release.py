@@ -128,6 +128,8 @@ def test_generated_client_launchers_avoid_fragile_shell_constructs() -> None:
 
     for installer in (linux, macos):
         assert r'ARGS=(--profiles "\$PROFILES_PATH" --stop-file "\$STOP_FILE"' in installer
+        assert 'for bypass_ip in "${BYPASS_IPS[@]-}"' in installer
+        assert 'for bypass_ip in "${BYPASS_IPS[@]}"' not in installer
         assert r'[[ -f "\$ERR_FILE" ]] && tail' not in installer
         assert r'if [[ -f "\$ERR_FILE" ]]; then tail' in installer
 
