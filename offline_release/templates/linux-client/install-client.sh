@@ -352,8 +352,8 @@ PID="\$!"
 echo "\$PID" > "\$PID_FILE"
 sleep 2
 if ! kill -0 "\$PID" >/dev/null 2>&1; then
-  [[ -f "\$LOG_FILE" ]] && tail -n 80 "\$LOG_FILE"
-  [[ -f "\$ERR_FILE" ]] && tail -n 80 "\$ERR_FILE" >&2
+  if [[ -f "\$LOG_FILE" ]]; then tail -n 80 "\$LOG_FILE"; fi
+  if [[ -f "\$ERR_FILE" ]]; then tail -n 80 "\$ERR_FILE" >&2; fi
   rm -f "\$PID_FILE"
   echo "pyvpn client failed to start" >&2
   exit 1
@@ -404,9 +404,9 @@ else
 fi
 "\$RUNTIME_EXE" servers --file "\$PROFILES_PATH" show
 echo "Log: \$LOG_FILE"
-[[ -f "\$LOG_FILE" ]] && tail -n 40 "\$LOG_FILE"
+if [[ -f "\$LOG_FILE" ]]; then tail -n 40 "\$LOG_FILE"; fi
 echo "Error log: \$ERR_FILE"
-[[ -f "\$ERR_FILE" ]] && tail -n 40 "\$ERR_FILE"
+if [[ -f "\$ERR_FILE" ]]; then tail -n 40 "\$ERR_FILE"; fi
 EOF
 
 cat > "$SERVERS_SCRIPT" <<EOF

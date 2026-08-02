@@ -22,6 +22,22 @@ function Assert-Admin {
     }
 }
 
+function Get-NativeWindowsArchitecture {
+    $architecture = $env:PROCESSOR_ARCHITEW6432
+    if ([string]::IsNullOrWhiteSpace($architecture)) {
+        $architecture = $env:PROCESSOR_ARCHITECTURE
+    }
+    if ([string]::IsNullOrWhiteSpace($architecture)) {
+        return "unknown"
+    }
+    switch ($architecture.ToUpperInvariant()) {
+        "AMD64" { return "x64" }
+        "ARM64" { return "arm64" }
+        "X86" { return "x86" }
+        default { return $architecture.ToLowerInvariant() }
+    }
+}
+
 function Quote-PowerShellString([string]$Value) {
     return "'" + $Value.Replace("'", "''") + "'"
 }
@@ -161,6 +177,10 @@ function Protect-LocalInstall([string]$Path) {
 Assert-Admin
 if (-not [Environment]::Is64BitOperatingSystem) {
     throw "This package requires 64-bit Windows 10 or Windows 11."
+}
+$nativeArchitecture = Get-NativeWindowsArchitecture
+if ($nativeArchitecture -ne "x64") {
+    throw "This package requires an x64 (AMD64) Windows computer; detected $nativeArchitecture."
 }
 if ([Environment]::OSVersion.Version.Major -lt 10) {
     throw "This package requires Windows 10 or Windows 11."
@@ -355,8 +375,14 @@ try {
 
 @"
 `$ErrorActionPreference = "Stop"
-& $(Quote-PowerShellString $runtimeExe) --profiles $(Quote-PowerShellString $profilesPath) `
-  --stop-file $(Quote-PowerShellString $stopPath)
+`$runtimeExe = $(Quote-PowerShellString $runtimeExe)
+`$clientArgs = @(
+  "--profiles",
+  $(Quote-PowerShellString $profilesPath),
+  "--stop-file",
+  $(Quote-PowerShellString $stopPath)
+)
+& `$runtimeExe @clientArgs
 exit `$LASTEXITCODE
 "@ | Set-Content -Encoding UTF8 -Path $startScript
 
@@ -372,6 +398,7 @@ if (-not `$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administr
 `$errLogPath = $(Quote-PowerShellString $errLogPath)
 `$stopPath = $(Quote-PowerShellString $stopPath)
 `$startScript = $(Quote-PowerShellString $startScript)
+`$powershellExe = Join-Path `$PSHOME "powershell.exe"
 Remove-Item -Force `$stopPath -ErrorAction SilentlyContinue
 if (Test-Path `$pidPath) {
   `$oldPid = [int](Get-Content -Raw `$pidPath)
@@ -387,7 +414,7 @@ if (`$otherClients.Count -gt 0) {
 }
 `$quotedStartScript = '"' + `$startScript + '"'
 `$startProcessParams = @{
-  FilePath = "powershell.exe"
+  FilePath = `$powershellExe
   ArgumentList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", `$quotedStartScript)
   WindowStyle = "Hidden"
   RedirectStandardOutput = `$logPath
@@ -437,21 +464,37 @@ if (Test-Path `$profilesPath) {
     `$tun = Get-NetAdapter -Name `$tunName -ErrorAction SilentlyContinue
     if (`$tun) {
       foreach (`$prefix in @('0.0.0.0/1', '128.0.0.0/1')) {
-        Get-NetRoute -AddressFamily IPv4 -DestinationPrefix `$prefix -InterfaceIndex `$tun.ifIndex `
-          -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:`$false -ErrorAction SilentlyContinue
+        `$routeQuery = @{
+          AddressFamily = "IPv4"
+          DestinationPrefix = `$prefix
+          InterfaceIndex = `$tun.ifIndex
+          ErrorAction = "SilentlyContinue"
+        }
+        foreach (`$route in @(Get-NetRoute @routeQuery)) {
+          `$route | Remove-NetRoute -Confirm:`$false -ErrorAction SilentlyContinue
+        }
       }
       Set-DnsClientServerAddress -InterfaceAlias `$tunName -ResetServerAddresses -ErrorAction SilentlyContinue
     }
   }
   foreach (`$profile in `$profiles) {
     try {
-      `$serverIps = @([System.Net.Dns]::GetHostAddresses([string]`$profile.server_host) |
-        Where-Object { `$_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork } |
-        ForEach-Object { `$_.ToString() })
+      `$serverIps = @()
+      foreach (`$address in [System.Net.Dns]::GetHostAddresses([string]`$profile.server_host)) {
+        if (`$address.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
+          `$serverIps += `$address.ToString()
+        }
+      }
     } catch { `$serverIps = @() }
     foreach (`$ip in @(`$serverIps + @(`$profile.bypass_ips) | Where-Object { `$_ } | Sort-Object -Unique)) {
-      Get-NetRoute -AddressFamily IPv4 -DestinationPrefix "`$ip/32" -ErrorAction SilentlyContinue |
-        Remove-NetRoute -Confirm:`$false -ErrorAction SilentlyContinue
+      `$routeQuery = @{
+        AddressFamily = "IPv4"
+        DestinationPrefix = "`$ip/32"
+        ErrorAction = "SilentlyContinue"
+      }
+      foreach (`$route in @(Get-NetRoute @routeQuery)) {
+        `$route | Remove-NetRoute -Confirm:`$false -ErrorAction SilentlyContinue
+      }
     }
   }
 }

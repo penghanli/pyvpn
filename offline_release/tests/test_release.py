@@ -22,13 +22,13 @@ def _load_build_module():
 def test_expected_package_matrix_and_names() -> None:
     build = _load_build_module()
     expected = {
-        "pyvpn-offline-client-windows-x64-0.1.0-r3.zip",
-        "pyvpn-offline-client-linux-x86_64-0.1.0-r3.tar.gz",
-        "pyvpn-offline-server-linux-x86_64-0.1.0-r3.tar.gz",
-        "pyvpn-offline-client-linux-arm64-0.1.0-r3.tar.gz",
-        "pyvpn-offline-server-linux-arm64-0.1.0-r3.tar.gz",
-        "pyvpn-offline-client-macos-x86_64-0.1.0-r3.tar.gz",
-        "pyvpn-offline-client-macos-arm64-0.1.0-r3.tar.gz",
+        "pyvpn-offline-client-windows-x64-0.1.0-r4.zip",
+        "pyvpn-offline-client-linux-x86_64-0.1.0-r4.tar.gz",
+        "pyvpn-offline-server-linux-x86_64-0.1.0-r4.tar.gz",
+        "pyvpn-offline-client-linux-arm64-0.1.0-r4.tar.gz",
+        "pyvpn-offline-server-linux-arm64-0.1.0-r4.tar.gz",
+        "pyvpn-offline-client-macos-x86_64-0.1.0-r4.tar.gz",
+        "pyvpn-offline-client-macos-arm64-0.1.0-r4.tar.gz",
     }
     actual = {
         build._archive_name(target_platform, arch, role)
@@ -106,14 +106,55 @@ def test_offline_clients_install_locally_and_use_server_profiles() -> None:
         )
 
 
-def test_windows_launcher_uses_stable_start_process_splatting() -> None:
+def test_generated_client_launchers_avoid_fragile_shell_constructs() -> None:
     windows = (
         OFFLINE_ROOT / "templates" / "windows-client" / "install-client.ps1"
+    ).read_text(encoding="utf-8")
+    linux = (
+        OFFLINE_ROOT / "templates" / "linux-client" / "install-client.sh"
+    ).read_text(encoding="utf-8")
+    macos = (
+        OFFLINE_ROOT / "templates" / "macos-client" / "install-client.sh"
     ).read_text(encoding="utf-8")
 
     assert "`$startProcessParams = @{" in windows
     assert "`$process = Start-Process @startProcessParams" in windows
+    assert 'FilePath = `$powershellExe' in windows
     assert 'Start-Process -FilePath "powershell.exe" `' not in windows
+    assert "`$clientArgs = @(" in windows
+    assert "& `$runtimeExe @clientArgs" in windows
+    assert "Get-NetRoute @routeQuery" in windows
+    assert not any(line.rstrip().endswith("`") for line in windows.splitlines())
+
+    for installer in (linux, macos):
+        assert r'ARGS=(--profiles "\$PROFILES_PATH" --stop-file "\$STOP_FILE"' in installer
+        assert r'[[ -f "\$ERR_FILE" ]] && tail' not in installer
+        assert r'if [[ -f "\$ERR_FILE" ]]; then tail' in installer
+
+
+def test_installers_validate_supported_architectures() -> None:
+    windows = (
+        OFFLINE_ROOT / "templates" / "windows-client" / "install-client.ps1"
+    ).read_text(encoding="utf-8")
+    linux_client = (
+        OFFLINE_ROOT / "templates" / "linux-client" / "install-client.sh"
+    ).read_text(encoding="utf-8")
+    linux_server = (
+        OFFLINE_ROOT / "templates" / "linux-server" / "install-server.sh"
+    ).read_text(encoding="utf-8")
+    macos = (
+        OFFLINE_ROOT / "templates" / "macos-client" / "install-client.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "PROCESSOR_ARCHITEW6432" in windows
+    assert '$nativeArchitecture -ne "x64"' in windows
+    for installer in (linux_client, linux_server):
+        assert "x86_64|amd64) ACTUAL_ARCH=\"x86_64\"" in installer
+        assert "aarch64|arm64) ACTUAL_ARCH=\"arm64\"" in installer
+        assert '[[ "$ACTUAL_ARCH" != "$PACKAGE_ARCH" ]]' in installer
+    assert 'x86_64) ACTUAL_ARCH="x86_64"' in macos
+    assert 'arm64) ACTUAL_ARCH="arm64"' in macos
+    assert '[[ "$ACTUAL_ARCH" != "$PACKAGE_ARCH" ]]' in macos
 
 
 def test_fresh_server_default_is_five_clients() -> None:
@@ -171,7 +212,7 @@ def test_assemble_all_platform_package(tmp_path: Path) -> None:
 
     all_archive = build.assemble_all(input_dir, output_dir)
 
-    assert all_archive.name == "pyvpn-offline-all-0.1.0-r3.zip"
+    assert all_archive.name == "pyvpn-offline-all-0.1.0-r4.zip"
     assert (output_dir / "SHA256SUMS").is_file()
     assert len(list(output_dir.iterdir())) == 9
     build.verify_archive(all_archive)

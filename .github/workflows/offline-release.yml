@@ -78,7 +78,7 @@ jobs:
         run: |
           $version = Get-Content offline_release/VERSION
           $archive = "offline_release/dist/pyvpn-offline-client-windows-x64-$version.zip"
-          $testRoot = Join-Path $env:RUNNER_TEMP "pyvpn-offline-install-test"
+          $testRoot = Join-Path $env:RUNNER_TEMP "pyvpn offline install test"
           $packageDir = Join-Path $testRoot "package"
           Expand-Archive -LiteralPath $archive -DestinationPath $packageDir
           $packageRoot = Get-ChildItem $packageDir -Directory | Select-Object -First 1
@@ -141,31 +141,92 @@ jobs:
           if (-not (Test-Path (Join-Path $installDir "runtime.previous"))) {
             throw "Offline upgrade did not retain the previous runtime."
           }
+          $launcherNames = @("start", "up", "down", "status", "servers", "switch")
+          foreach ($launcherName in $launcherNames) {
+            $launcher = Join-Path $installDir "pyvpn-client-$launcherName.ps1"
+            if (-not (Test-Path $launcher)) {
+              throw "Local client launcher was not created: $launcherName"
+            }
+            $launcherTokens = $null
+            $launcherErrors = $null
+            $launcherAst = [System.Management.Automation.Language.Parser]::ParseFile(
+              $launcher,
+              [ref]$launcherTokens,
+              [ref]$launcherErrors
+            )
+            if ($launcherErrors.Count -gt 0) {
+              $launcherErrors | ForEach-Object { Write-Error "$launcherName`: $($_.Message)" }
+              throw "Generated client launcher contains PowerShell syntax errors: $launcherName"
+            }
+            $orphanOptions = @($launcherAst.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -match '^-'
+            }, $true))
+            if ($orphanOptions.Count -gt 0) {
+              throw "Generated client launcher contains an orphaned option command: $launcherName"
+            }
+          }
           $upScript = Join-Path $installDir "pyvpn-client-up.ps1"
-          if (-not (Test-Path $upScript)) {
-            throw "Local client launcher was not created."
-          }
-          $launcherTokens = $null
-          $launcherErrors = $null
-          $launcherAst = [System.Management.Automation.Language.Parser]::ParseFile(
-            $upScript,
-            [ref]$launcherTokens,
-            [ref]$launcherErrors
-          )
-          if ($launcherErrors.Count -gt 0) {
-            $launcherErrors | ForEach-Object { Write-Error $_.Message }
-            throw "Generated client launcher contains PowerShell syntax errors."
-          }
-          $orphanArgumentList = @($launcherAst.FindAll({
-            param($node)
-            $node -is [System.Management.Automation.Language.CommandAst] -and
-              $node.GetCommandName() -eq "-ArgumentList"
-          }, $true))
-          if ($orphanArgumentList.Count -gt 0) {
-            throw "Generated client launcher contains an orphaned -ArgumentList command."
-          }
           if ((Get-Content -Raw $upScript) -notmatch 'Start-Process @startProcessParams') {
             throw "Generated client launcher does not use stable Start-Process splatting."
+          }
+          $statusScript = Join-Path $installDir "pyvpn-client-status.ps1"
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $statusScript
+          if ($LASTEXITCODE -ne 0) { throw "Generated status launcher failed." }
+
+          $startScript = Join-Path $installDir "pyvpn-client-start.ps1"
+          $downScript = Join-Path $installDir "pyvpn-client-down.ps1"
+          $runtimeExe = Join-Path $installDir "runtime/pyvpn-client.exe"
+          $runtimeBackup = "$runtimeExe.real"
+          $argumentsFile = Join-Path $testRoot "captured client arguments.txt"
+          $fakeRuntimeSource = @'
+          using System;
+          using System.IO;
+          using System.Threading;
+
+          public static class Program
+          {
+              public static int Main(string[] args)
+              {
+                  string output = Environment.GetEnvironmentVariable("PYVPN_TEST_ARGS");
+                  if (String.IsNullOrEmpty(output)) return 2;
+                  File.WriteAllLines(output, args);
+                  int stopIndex = Array.IndexOf(args, "--stop-file");
+                  if (stopIndex < 0 || stopIndex + 1 >= args.Length) return 3;
+                  for (int i = 0; i < 300; i++)
+                  {
+                      if (File.Exists(args[stopIndex + 1])) return 0;
+                      Thread.Sleep(100);
+                  }
+                  return 4;
+              }
+          }
+          '@
+          Move-Item -LiteralPath $runtimeExe -Destination $runtimeBackup
+          try {
+            Add-Type -TypeDefinition $fakeRuntimeSource -OutputAssembly $runtimeExe `
+              -OutputType ConsoleApplication
+            $env:PYVPN_TEST_ARGS = $argumentsFile
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $upScript
+            if ($LASTEXITCODE -ne 0) { throw "Generated up launcher failed." }
+            $actualArguments = @(Get-Content -LiteralPath $argumentsFile)
+            $expectedArguments = @(
+              "--profiles", $profilesPath,
+              "--stop-file", (Join-Path $configDir "client.stop")
+            )
+            if (($actualArguments -join "`n") -ne ($expectedArguments -join "`n")) {
+              throw "Generated start launcher did not preserve argument boundaries."
+            }
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $downScript
+            if ($LASTEXITCODE -ne 0) { throw "Generated down launcher failed." }
+          } finally {
+            Remove-Item Env:PYVPN_TEST_ARGS -ErrorAction SilentlyContinue
+            if (Test-Path (Join-Path $configDir "client.pid")) {
+              & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $downScript *> $null
+            }
+            Remove-Item -Force -LiteralPath $runtimeExe -ErrorAction SilentlyContinue
+            Move-Item -LiteralPath $runtimeBackup -Destination $runtimeExe
           }
           if ((Get-Content -Raw $legacyMarker).Trim() -ne "leave unchanged" -or
               (Test-Path (Join-Path $legacyDir "runtime"))) {
@@ -273,6 +334,8 @@ jobs:
             libuuid-devel \
             ncurses-devel \
             openssl-devel \
+            iproute \
+            procps-ng \
             readline-devel \
             sqlite-devel \
             xz \
@@ -384,6 +447,62 @@ jobs:
             echo "Failed preflight changed an installation target" >&2
             exit 1
           fi
+      - name: Install and validate generated Linux helpers
+        shell: bash
+        run: |
+          CLIENT_ROOT="$(find smoke-client -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          SERVER_ROOT="$(find smoke-server -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          CLIENT_INSTALL="/tmp/pyvpn generated client ${{ matrix.arch }}"
+          CLIENT_CONFIG="$CLIENT_INSTALL/config"
+          FINGERPRINT="sha256:$(printf '0%.0s' {1..64})"
+          mkdir -p /dev/net
+          [[ -e /dev/net/tun ]] || touch /dev/net/tun
+
+          "$CLIENT_ROOT/install-client.sh" \
+            --server-host 203.0.113.10 \
+            --token offline_test_token \
+            --cert-fingerprint "$FINGERPRINT" \
+            --install-dir "$CLIENT_INSTALL" \
+            --config-dir "$CLIENT_CONFIG"
+          for name in start up down status servers switch; do
+            helper="$CLIENT_INSTALL/pyvpn-client-$name"
+            [[ -x "$helper" ]] || { echo "Missing generated helper: $helper" >&2; exit 1; }
+            bash -n "$helper"
+          done
+          "$CLIENT_INSTALL/pyvpn-client-servers" list --no-probe
+          "$CLIENT_INSTALL/pyvpn-client-status"
+
+          TEST_BIN="/tmp/pyvpn-systemd-test-bin-${{ matrix.arch }}"
+          SYSTEMD_STATE="/tmp/pyvpn-systemd-state-${{ matrix.arch }}"
+          SERVER_INSTALL="/tmp/pyvpn-server-${{ matrix.arch }}"
+          SERVER_CONFIG="/tmp/pyvpn-server-config-${{ matrix.arch }}"
+          mkdir -p "$TEST_BIN" /run/systemd/system
+          export PYVPN_TEST_SYSTEMD_STATE="$SYSTEMD_STATE"
+          cat > "$TEST_BIN/systemctl" <<'SH'
+          #!/usr/bin/env bash
+          case "${1:-}" in
+            is-active) [[ -f "$PYVPN_TEST_SYSTEMD_STATE" ]] ;;
+            is-enabled) exit 1 ;;
+            enable) touch "$PYVPN_TEST_SYSTEMD_STATE" ;;
+            *) exit 0 ;;
+          esac
+          SH
+          cat > "$TEST_BIN/nft" <<'SH'
+          #!/usr/bin/env bash
+          exit 0
+          SH
+          chmod 755 "$TEST_BIN/systemctl" "$TEST_BIN/nft"
+          export PATH="$TEST_BIN:$PATH"
+          "$SERVER_ROOT/install-server.sh" \
+            --public-host 203.0.113.10 \
+            --token offline_test_token \
+            --install-dir "$SERVER_INSTALL" \
+            --config-dir "$SERVER_CONFIG"
+          for helper in pyvpn-server-restart pyvpn-server-status pyvpn-server-logs; do
+            bash -n "/usr/local/bin/$helper"
+          done
+          grep -Fx 'PYVPN_MAX_CLIENTS=5' "$SERVER_CONFIG/server.env"
+          grep -F -- '--max-clients ${PYVPN_MAX_CLIENTS}' /etc/systemd/system/pyvpn-server.service
       - name: Confirm existing online files are untouched
         run: |
           find README.md src scripts -type f \
@@ -459,6 +578,25 @@ jobs:
             --cert-fingerprint "sha256:$(printf '0%.0s' {1..64})" --use
           "$PACKAGE_ROOT/payload/pyvpn-client/pyvpn-client" \
             servers --file "$PROFILES" list --no-probe
+      - name: Install and validate generated macOS helpers
+        run: |
+          PACKAGE_ROOT="$(find smoke -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          INSTALL_ROOT="$RUNNER_TEMP/pyvpn generated macos client ${{ matrix.arch }}"
+          CONFIG_ROOT="$INSTALL_ROOT/config"
+          FINGERPRINT="sha256:$(printf '0%.0s' {1..64})"
+          sudo "$PACKAGE_ROOT/install-client.sh" \
+            --server-host 203.0.113.10 \
+            --token offline_test_token \
+            --cert-fingerprint "$FINGERPRINT" \
+            --install-dir "$INSTALL_ROOT" \
+            --config-dir "$CONFIG_ROOT"
+          for name in start up down status servers switch; do
+            helper="$INSTALL_ROOT/pyvpn-client-$name"
+            sudo test -x "$helper"
+            sudo bash -n "$helper"
+          done
+          sudo "$INSTALL_ROOT/pyvpn-client-servers" list --no-probe
+          sudo "$INSTALL_ROOT/pyvpn-client-status"
       - name: Verify macOS 12 deployment target
         run: |
           PACKAGE_ROOT="$(find smoke -mindepth 1 -maxdepth 1 -type d | head -n 1)"
