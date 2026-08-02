@@ -78,6 +78,18 @@ def test_customer_installers_have_no_network_install_commands() -> None:
             )
 
 
+def test_release_downloader_is_restartable_and_uses_fast_web_requests() -> None:
+    downloader = (OFFLINE_ROOT / "download-release.ps1").read_text(encoding="utf-8")
+
+    assert '$ProgressPreference = "SilentlyContinue"' in downloader
+    assert "Get-Command curl.exe" in downloader
+    assert '@("--continue-at", "-")' in downloader
+    assert '$curlExit -in @(33, 36)' in downloader
+    assert "Invoke-WebRequest -UseBasicParsing" in downloader
+    assert 'if ($existingHash -eq $expectedHashes[$name])' in downloader
+    assert '$partial = "$destination.partial"' in downloader
+
+
 def test_offline_clients_install_locally_and_use_server_profiles() -> None:
     windows = (
         OFFLINE_ROOT / "templates" / "windows-client" / "install-client.ps1"
