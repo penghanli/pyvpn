@@ -4,6 +4,13 @@ plugins {
     id "com.android.application"
 }
 
+def versionFile = rootProject.file("version.properties")
+def versionValues = new Properties()
+if (!versionFile.exists()) {
+    throw new GradleException("Missing Android version file: ${versionFile}")
+}
+versionFile.withInputStream { versionValues.load(it) }
+
 def signingFile = rootProject.file(".signing/keystore.properties")
 def signingValues = new Properties()
 if (signingFile.exists()) {
@@ -19,8 +26,8 @@ android {
         applicationId "com.penghanli.pyvpn"
         minSdk 28
         targetSdk 35
-        versionCode 1
-        versionName "0.1.0"
+        versionCode Integer.parseInt(versionValues.getProperty("versionCode"))
+        versionName versionValues.getProperty("versionName")
         testInstrumentationRunner "android.test.InstrumentationTestRunner"
     }
 

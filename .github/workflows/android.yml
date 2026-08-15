@@ -32,16 +32,20 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
       - name: Prepare APK artifact
+        id: package
         working-directory: android
         run: |
+          version_name="$(sed -n 's/^versionName=//p' version.properties)"
+          test -n "$version_name"
+          apk_name="pyvpn-android-${version_name}-debug.apk"
           mkdir -p dist
-          cp app/build/outputs/apk/debug/pyvpn-android-0.1.0-debug.apk \
-            dist/pyvpn-android-0.1.0-debug.apk
-          sha256sum dist/pyvpn-android-0.1.0-debug.apk > dist/SHA256SUMS
+          cp "app/build/outputs/apk/debug/$apk_name" "dist/$apk_name"
+          sha256sum "dist/$apk_name" > dist/SHA256SUMS
+          echo "apk_name=$apk_name" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: pyvpn-android-apk
           path: |
-            android/dist/pyvpn-android-0.1.0-debug.apk
+            android/dist/${{ steps.package.outputs.apk_name }}
             android/dist/SHA256SUMS
           if-no-files-found: error

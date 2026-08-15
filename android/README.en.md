@@ -10,7 +10,7 @@ This is a native Android client compatible with the existing pyvpn Linux server 
 
 ## Install and use
 
-1. Copy `pyvpn-android-0.1.0.apk` to the phone and install it.
+1. Copy `pyvpn-android-0.1.0-r2.apk` to the phone and install it. It can upgrade v1 in place while preserving node profiles.
 2. Open `pyvpn` and tap **Add node**.
 3. Enter the server address, control port, token, and certificate fingerprint.
 4. Select the node and tap **Connect**. Approve the Android VPN prompt on first use.
@@ -29,6 +29,13 @@ cd android
 powershell -ExecutionPolicy Bypass -File .\build-apk.ps1
 ```
 
-The signed APK is written to `android/dist/pyvpn-android-0.1.0.apk`.
+The signed APK is written to `android/dist/pyvpn-android-0.1.0-r2.apk`.
 
 The first build creates `android/.signing/pyvpn-release.jks` and its local password file. Git ignores both files. Back up the complete `android/.signing/` directory because every future update must use the same signing key.
+
+The version is defined once in `android/version.properties`; the local build script and GitHub Actions read it automatically.
+
+## Changelog
+
+- `0.1.0-r2`: Bind the control socket before `VpnService.protect()` for compatibility with Android vendor builds that allocate the socket file descriptor lazily.
+- `0.1.0`: Initial Android release.

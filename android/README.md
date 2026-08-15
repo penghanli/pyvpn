@@ -10,7 +10,7 @@
 
 ## 安装和使用
 
-1. 将 `pyvpn-android-0.1.0.apk` 复制到手机并安装。
+1. 将 `pyvpn-android-0.1.0-r2.apk` 复制到手机并安装；已安装 v1 时可直接覆盖升级，节点配置会保留。
 2. 打开 `pyvpn`，点击“添加节点”。
 3. 填写服务器 IP、控制端口、Token 和证书指纹并保存。
 4. 选择节点并点击“连接”，首次连接时允许 Android 创建 VPN。
@@ -32,7 +32,7 @@ powershell -ExecutionPolicy Bypass -File .\build-apk.ps1
 生成的正式签名 APK 位于：
 
 ```text
-android/dist/pyvpn-android-0.1.0.apk
+android/dist/pyvpn-android-0.1.0-r2.apk
 ```
 
 首次构建会生成 `android/.signing/pyvpn-release.jks` 和密码配置。它们不会提交到 Git，但后续 APK 升级必须使用同一个签名，因此需要单独备份整个 `android/.signing/` 目录。
@@ -44,6 +44,13 @@ android/dist/pyvpn-android-0.1.0.apk
 ```
 
 测试 APK 位于 `app/build/outputs/apk/debug/`。
+
+版本号统一保存在 `android/version.properties`，本地构建脚本和 GitHub Actions 会自动读取该文件。
+
+## 版本记录
+
+- `0.1.0-r2`：兼容需要先创建底层 Socket 文件描述符才能调用 `VpnService.protect()` 的 Android 厂商系统。
+- `0.1.0`：首个 Android 版本。
 
 ## 当前范围
 

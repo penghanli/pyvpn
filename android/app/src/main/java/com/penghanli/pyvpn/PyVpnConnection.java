@@ -183,27 +183,54 @@ final class PyVpnConnection {
         SSLContext context = SSLContext.getInstance("TLS");
         context.init(null, trustManagers, new SecureRandom());
 
-        Socket rawSocket = new Socket();
-        if (!service.protect(rawSocket)) {
-            rawSocket.close();
-            throw new IOException("无法将控制连接排除在 VPN 路由之外");
+        Socket rawSocket = openProtectedControlSocket(address);
+        SSLSocket sslSocket = null;
+        try {
+            SSLSocketFactory factory = context.getSocketFactory();
+            sslSocket = (SSLSocket) factory.createSocket(
+                    rawSocket,
+                    node.serverHost(),
+                    node.controlPort(),
+                    true
+            );
+            controlSocket = sslSocket;
+            sslSocket.setEnabledProtocols(supportedTlsProtocols(sslSocket.getSupportedProtocols()));
+            sslSocket.setSoTimeout(CONTROL_TIMEOUT_MS);
+            sslSocket.startHandshake();
+            controlInput = sslSocket.getInputStream();
+            controlOutput = sslSocket.getOutputStream();
+        } catch (IOException | GeneralSecurityException | RuntimeException exception) {
+            closeQuietly(sslSocket != null ? sslSocket : rawSocket);
+            controlSocket = null;
+            throw exception;
         }
-        rawSocket.connect(new InetSocketAddress(address, node.controlPort()), CONNECT_TIMEOUT_MS);
-        rawSocket.setTcpNoDelay(true);
+    }
 
-        SSLSocketFactory factory = context.getSocketFactory();
-        SSLSocket sslSocket = (SSLSocket) factory.createSocket(
-                rawSocket,
-                node.serverHost(),
-                node.controlPort(),
-                true
-        );
-        controlSocket = sslSocket;
-        sslSocket.setEnabledProtocols(supportedTlsProtocols(sslSocket.getSupportedProtocols()));
-        sslSocket.setSoTimeout(CONTROL_TIMEOUT_MS);
-        sslSocket.startHandshake();
-        controlInput = sslSocket.getInputStream();
-        controlOutput = sslSocket.getOutputStream();
+    private Socket openProtectedControlSocket(Inet4Address address) throws IOException {
+        Socket socket = new Socket();
+        try {
+            // Android creates a Socket's file descriptor lazily. Some vendor builds need an
+            // explicit bind before VpnService.protect(Socket) can protect that descriptor.
+            bindForVpnProtection(socket);
+            if (!service.protect(socket)) {
+                throw new IOException("无法将控制连接排除在 VPN 路由之外");
+            }
+            socket.connect(
+                    new InetSocketAddress(address, node.controlPort()),
+                    CONNECT_TIMEOUT_MS
+            );
+            socket.setTcpNoDelay(true);
+            return socket;
+        } catch (IOException | RuntimeException exception) {
+            closeQuietly(socket);
+            throw exception;
+        }
+    }
+
+    static void bindForVpnProtection(Socket socket) throws IOException {
+        if (!socket.isBound()) {
+            socket.bind(new InetSocketAddress(0));
+        }
     }
 
     private void openUdpSocket(Inet4Address address, int port) throws IOException {
@@ -432,6 +459,17 @@ final class PyVpnConnection {
             descriptor.close();
         } catch (IOException ignored) {
             // Closing is best-effort during shutdown.
+        }
+    }
+
+    private static void closeQuietly(Socket socket) {
+        if (socket == null) {
+            return;
+        }
+        try {
+            socket.close();
+        } catch (IOException ignored) {
+            // Closing is best-effort during setup and shutdown.
         }
     }
 
