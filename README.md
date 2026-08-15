@@ -10,7 +10,7 @@ to the tunnel, and restore local networking when disconnected.
 ## Current Scope
 
 - Server: Linux VPS only.
-- Clients: Linux, Windows, and experimental macOS CLI.
+- Clients: Linux, Windows, Android, and experimental macOS CLI.
 - Tunnel: IPv4 over encrypted UDP.
 - Control channel: TLS with token authentication and certificate fingerprint
   pinning.
@@ -191,6 +191,23 @@ powershell -ExecutionPolicy Bypass -File "C:\ProgramData\pyvpn\pyvpn-client-up.p
 powershell -ExecutionPolicy Bypass -File "C:\ProgramData\pyvpn\pyvpn-client-down.ps1"
 powershell -ExecutionPolicy Bypass -File "C:\ProgramData\pyvpn\pyvpn-client-status.ps1"
 ```
+
+### Android Client
+
+The native Android client supports Android 9 or newer and uses the same server,
+token, certificate fingerprint, TCP `8443`, and UDP `8444` as the desktop
+clients. It provides saved nodes, default-node selection, and switch-and-reconnect.
+
+Build the signed APK on Windows with JDK 17 and Android SDK 35:
+
+```powershell
+cd android
+powershell -ExecutionPolicy Bypass -File .\build-apk.ps1
+```
+
+Install `android\dist\pyvpn-android-0.1.0.apk`, add a node in the app, approve
+the Android VPN permission, and tap **Connect**. See `android/README.md` for the
+complete Android instructions.
 
 ### macOS Client
 

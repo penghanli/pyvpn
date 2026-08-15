@@ -1,4 +1,5 @@
 .venv/
+.gradle/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -10,3 +11,5 @@ dist/
 server.crt
 server.key
 *.log
+android/.signing/
+android/local.properties

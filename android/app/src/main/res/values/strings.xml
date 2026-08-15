@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">pyvpn</string>
+    <string name="current_node">当前节点</string>
+    <string name="no_nodes">尚未添加节点</string>
+    <string name="add_node">添加节点</string>
+    <string name="edit_node">编辑</string>
+    <string name="delete_node">删除</string>
+    <string name="connect">连接</string>
+    <string name="disconnect">断开</string>
+    <string name="cancel_connection">取消</string>
+    <string name="switch_and_connect">切换并连接</string>
+    <string name="status_disconnected">未连接</string>
+    <string name="node_name">节点名称（可选）</string>
+    <string name="server_host">服务器 IP 或域名</string>
+    <string name="control_port">控制端口</string>
+    <string name="default_control_port">8443</string>
+    <string name="shared_token">Token</string>
+    <string name="certificate_fingerprint">证书指纹（sha256:…）</string>
+    <string name="show_token">显示 Token</string>
+    <string name="save">保存</string>
+    <string name="cancel">取消</string>
+    <string name="confirm_delete">删除节点“%1$s”？</string>
+    <string name="notification_channel">pyvpn 连接</string>
+    <string name="notification_disconnect">断开</string>
+</resources>

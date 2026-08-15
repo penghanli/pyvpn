@@ -1,0 +1,74 @@
+import java.util.Properties
+
+plugins {
+    id "com.android.application"
+}
+
+def signingFile = rootProject.file(".signing/keystore.properties")
+def signingValues = new Properties()
+if (signingFile.exists()) {
+    signingFile.withInputStream { signingValues.load(it) }
+}
+
+android {
+    namespace "com.penghanli.pyvpn"
+    compileSdk 35
+    buildToolsVersion "35.0.0"
+
+    defaultConfig {
+        applicationId "com.penghanli.pyvpn"
+        minSdk 28
+        targetSdk 35
+        versionCode 1
+        versionName "0.1.0"
+        testInstrumentationRunner "android.test.InstrumentationTestRunner"
+    }
+
+    signingConfigs {
+        if (signingFile.exists()) {
+            release {
+                storeFile rootProject.file(signingValues.getProperty("storeFile"))
+                storePassword signingValues.getProperty("storePassword")
+                keyAlias signingValues.getProperty("keyAlias")
+                keyPassword signingValues.getProperty("keyPassword")
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            versionNameSuffix "-debug"
+        }
+        release {
+            minifyEnabled false
+            if (signingFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+
+    lint {
+        abortOnError true
+        checkReleaseBuilds true
+    }
+
+    applicationVariants.configureEach { variant ->
+        variant.outputs.configureEach {
+            outputFileName = "pyvpn-android-${variant.versionName}.apk"
+        }
+    }
+}
+
+dependencies {
+    testImplementation "junit:junit:4.13.2"
+}
