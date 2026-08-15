@@ -205,7 +205,7 @@ cd android
 powershell -ExecutionPolicy Bypass -File .\build-apk.ps1
 ```
 
-Install `android\dist\pyvpn-android-0.1.0-r2.apk`, add a node in the app, approve
+Install `android\dist\pyvpn-android-0.1.0-r3.apk`, add a node in the app, approve
 the Android VPN permission, and tap **Connect**. See `android/README.md` for the
 complete Android instructions.
 

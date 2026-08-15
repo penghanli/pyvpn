@@ -50,6 +50,8 @@ final class PyVpnConnection {
     private static final int CONTROL_TIMEOUT_MS = 10_000;
     private static final int HEARTBEAT_INTERVAL_MS = 15_000;
     private static final int KEEPALIVE_INTERVAL_MS = 10_000;
+    private static final int UDP_SOCKET_BUFFER_BYTES = 4 * 1024 * 1024;
+    private static final byte[] EMPTY_PACKET = new byte[0];
 
     private final PyVpnService service;
     private final NodeProfile node;
@@ -64,12 +66,14 @@ final class PyVpnConnection {
     private final Object udpWriteLock = new Object();
     private final Object closeLock = new Object();
     private final List<Thread> workers = new ArrayList<>();
+    private final DatagramPacket udpSendPacket = new DatagramPacket(EMPTY_PACKET, 0);
 
     private volatile Thread runnerThread;
     private volatile SSLSocket controlSocket;
     private volatile InputStream controlInput;
     private volatile OutputStream controlOutput;
     private volatile DatagramSocket udpSocket;
+    private byte[] udpSendBuffer;
     private volatile ParcelFileDescriptor tunnel;
     private volatile FileInputStream tunnelInput;
     private volatile FileOutputStream tunnelOutput;
@@ -116,8 +120,9 @@ final class PyVpnConnection {
             Inet4Address udpAddress = resolveIpv4(session.udpHost());
             requireNotStopped();
             openUdpSocket(udpAddress, session.udpPort());
+            udpSendBuffer = new byte[encryptedPacketBufferSize()];
             running.set(true);
-            sendUdp(PacketCodec.TYPE_KEEPALIVE, new byte[0]);
+            sendUdp(PacketCodec.TYPE_KEEPALIVE, EMPTY_PACKET);
 
             tunnel = service.establishTunnel(node, session);
             if (tunnel == null) {
@@ -235,12 +240,26 @@ final class PyVpnConnection {
 
     private void openUdpSocket(Inet4Address address, int port) throws IOException {
         DatagramSocket socket = new DatagramSocket();
-        if (!service.protect(socket)) {
+        try {
+            tuneUdpSocket(socket);
+            if (!service.protect(socket)) {
+                throw new IOException("无法将 UDP 隧道排除在 VPN 路由之外");
+            }
+            socket.connect(address, port);
+            udpSocket = socket;
+        } catch (IOException | RuntimeException exception) {
             socket.close();
-            throw new IOException("无法将 UDP 隧道排除在 VPN 路由之外");
+            throw exception;
         }
-        socket.connect(address, port);
-        udpSocket = socket;
+    }
+
+    private static void tuneUdpSocket(DatagramSocket socket) {
+        try {
+            socket.setReceiveBufferSize(UDP_SOCKET_BUFFER_BYTES);
+            socket.setSendBufferSize(UDP_SOCKET_BUFFER_BYTES);
+        } catch (IOException ignored) {
+            // Socket buffer sizes are hints; keep the platform defaults if an OEM rejects them.
+        }
     }
 
     private static String certificateFingerprint(X509Certificate certificate)
@@ -297,13 +316,13 @@ final class PyVpnConnection {
         while (running.get()) {
             sleepWhileRunning(KEEPALIVE_INTERVAL_MS);
             if (running.get()) {
-                sendUdp(PacketCodec.TYPE_KEEPALIVE, new byte[0]);
+                sendUdp(PacketCodec.TYPE_KEEPALIVE, EMPTY_PACKET);
             }
         }
     }
 
     private void tunnelToUdpLoop() throws Exception {
-        byte[] buffer = new byte[65_535];
+        byte[] buffer = new byte[plainPacketBufferSize()];
         while (running.get()) {
             int length = tunnelInput.read(buffer);
             if (length < 0) {
@@ -314,8 +333,7 @@ final class PyVpnConnection {
                 if (info.source() != clientAddress) {
                     continue;
                 }
-                byte[] packet = Arrays.copyOf(buffer, info.totalLength());
-                sendUdp(PacketCodec.TYPE_DATA, packet);
+                sendUdp(PacketCodec.TYPE_DATA, buffer, 0, info.totalLength());
             } catch (PyVpnProtocolException ignored) {
                 // Ignore malformed or non-IPv4 packets from the TUN interface.
             }
@@ -323,37 +341,36 @@ final class PyVpnConnection {
     }
 
     private void udpToTunnelLoop() throws Exception {
-        byte[] buffer = new byte[65_535];
+        byte[] buffer = new byte[encryptedPacketBufferSize()];
+        byte[] plaintextBuffer = new byte[plainPacketBufferSize()];
         DatagramPacket datagram = new DatagramPacket(buffer, buffer.length);
         while (running.get()) {
             datagram.setLength(buffer.length);
             udpSocket.receive(datagram);
-            byte[] encrypted = Arrays.copyOfRange(
-                    datagram.getData(),
-                    datagram.getOffset(),
-                    datagram.getOffset() + datagram.getLength()
-            );
             try {
-                PacketCodec.Header header = PacketCodec.parseHeader(encrypted);
-                if (header.sessionId() != session.sessionId()) {
+                PacketCodec.OpenedPacket opened = PacketCodec.openInto(
+                        datagram.getData(),
+                        datagram.getOffset(),
+                        datagram.getLength(),
+                        session.serverToClientCipher(),
+                        plaintextBuffer,
+                        0
+                );
+                if (opened.header().sessionId() != session.sessionId()) {
                     continue;
                 }
-                PacketCodec.OpenedPacket opened = PacketCodec.open(
-                        encrypted,
-                        session.serverToClientCipher()
-                );
                 if (!replayWindow.accept(opened.header().sequence())) {
                     continue;
                 }
                 if (opened.header().packetType() == PacketCodec.TYPE_KEEPALIVE) {
                     continue;
                 }
-                byte[] plaintext = opened.plaintext();
-                Ipv4Packet.Info info = Ipv4Packet.inspect(plaintext, plaintext.length);
+                byte[] plaintext = opened.plaintextBuffer();
+                Ipv4Packet.Info info = Ipv4Packet.inspect(plaintext, opened.plaintextLength());
                 if (info.destination() != clientAddress) {
                     continue;
                 }
-                tunnelOutput.write(plaintext, 0, info.totalLength());
+                tunnelOutput.write(plaintext, opened.plaintextOffset(), info.totalLength());
             } catch (PyVpnProtocolException ignored) {
                 // Invalid, replayed, or unauthenticated datagrams are dropped.
             }
@@ -361,25 +378,47 @@ final class PyVpnConnection {
     }
 
     private void sendUdp(int packetType, byte[] plaintext) throws IOException {
+        sendUdp(packetType, plaintext, 0, plaintext.length);
+    }
+
+    private void sendUdp(
+            int packetType,
+            byte[] plaintext,
+            int plaintextOffset,
+            int plaintextLength
+    ) throws IOException {
         SessionConfig activeSession = session;
         DatagramSocket socket = udpSocket;
         if (activeSession == null || socket == null || socket.isClosed()) {
             return;
         }
-        long sequence = transmitSequence.incrementAndGet();
-        if (sequence <= 0) {
-            throw new PyVpnProtocolException("隧道数据包序号已耗尽");
-        }
-        byte[] encrypted = PacketCodec.seal(
-                packetType,
-                activeSession.sessionId(),
-                sequence,
-                plaintext,
-                activeSession.clientToServerCipher()
-        );
         synchronized (udpWriteLock) {
-            socket.send(new DatagramPacket(encrypted, encrypted.length));
+            long sequence = transmitSequence.incrementAndGet();
+            if (sequence <= 0) {
+                throw new PyVpnProtocolException("隧道数据包序号已耗尽");
+            }
+            int encryptedLength = PacketCodec.sealInto(
+                    packetType,
+                    activeSession.sessionId(),
+                    sequence,
+                    plaintext,
+                    plaintextOffset,
+                    plaintextLength,
+                    activeSession.clientToServerCipher(),
+                    udpSendBuffer,
+                    0
+            );
+            udpSendPacket.setData(udpSendBuffer, 0, encryptedLength);
+            socket.send(udpSendPacket);
         }
+    }
+
+    private int plainPacketBufferSize() {
+        return Math.max(2_048, session.mtu() + 64);
+    }
+
+    private int encryptedPacketBufferSize() {
+        return plainPacketBufferSize() + PacketCodec.HEADER_SIZE + PacketCodec.TAG_SIZE;
     }
 
     private void startWorker(String name, ThrowingRunnable action) {

@@ -46,6 +46,81 @@ public final class ProtocolCompatibilityTest {
     }
 
     @Test
+    public void rangedPacketCodecAvoidsInputCopiesAndPreservesWireFormat() throws Exception {
+        byte[] key = new byte[32];
+        for (int index = 0; index < key.length; index++) {
+            key[index] = (byte) index;
+        }
+        TunnelCipher cipher = new TunnelCipher(new DirectionKey(key, hex("a0a1a2a3")));
+        long sessionId = new BigInteger("fedcba9876543210", 16).longValue();
+        byte[] plaintext = hex("4500001400010000400100000a08000208080808");
+        byte[] paddedPlaintext = new byte[plaintext.length + 10];
+        System.arraycopy(plaintext, 0, paddedPlaintext, 4, plaintext.length);
+
+        byte[] paddedDatagram = new byte[plaintext.length + PacketCodec.HEADER_SIZE
+                + PacketCodec.TAG_SIZE + 12];
+        int sealedLength = PacketCodec.sealInto(
+                PacketCodec.TYPE_DATA,
+                sessionId,
+                1,
+                paddedPlaintext,
+                4,
+                plaintext.length,
+                cipher,
+                paddedDatagram,
+                7
+        );
+        byte[] plaintextOutput = new byte[plaintext.length + PacketCodec.TAG_SIZE + 9];
+
+        PacketCodec.OpenedPacket opened = PacketCodec.openInto(
+                paddedDatagram,
+                7,
+                sealedLength,
+                cipher,
+                plaintextOutput,
+                3
+        );
+
+        assertEquals(sessionId, opened.header().sessionId());
+        assertArrayEquals(plaintext, opened.plaintext());
+        assertEquals(3, opened.plaintextOffset());
+        assertEquals(plaintext.length, opened.plaintextLength());
+        assertEquals(
+                "5059564e0101fedcba9876543210000000000000000162dc35da5ab45a704992cb1416c1c0accdcb06f82dd402a24db2ecb9c8eef0a0164386f8",
+                toHex(Arrays.copyOfRange(paddedDatagram, 7, 7 + sealedLength))
+        );
+    }
+
+    @Test
+    public void reusedCipherStillAuthenticatesEveryPacket() throws Exception {
+        byte[] key = new byte[32];
+        TunnelCipher cipher = new TunnelCipher(new DirectionKey(key, hex("01020304")));
+
+        for (int sequence = 1; sequence <= 128; sequence++) {
+            byte[] plaintext = ("packet-" + sequence).getBytes();
+            byte[] sealed = PacketCodec.seal(
+                    PacketCodec.TYPE_DATA,
+                    42,
+                    sequence,
+                    plaintext,
+                    cipher
+            );
+            PacketCodec.OpenedPacket opened = PacketCodec.open(sealed, cipher);
+            assertArrayEquals(plaintext, opened.plaintext());
+        }
+
+        byte[] tampered = PacketCodec.seal(
+                PacketCodec.TYPE_DATA,
+                42,
+                129,
+                "private".getBytes(),
+                cipher
+        );
+        tampered[5] = (byte) PacketCodec.TYPE_KEEPALIVE;
+        assertThrows(PyVpnProtocolException.class, () -> PacketCodec.open(tampered, cipher));
+    }
+
+    @Test
     public void controlFramePreservesUnsignedSessionId() throws Exception {
         String json = "{\"session_id\":18364758544493064720,\"type\":\"accept\"}";
         Map<String, Object> parsed = MiniJson.parseObject(json);
