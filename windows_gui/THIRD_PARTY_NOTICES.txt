@@ -1,0 +1,11 @@
+pyvpn Windows desktop client includes the following third-party software:
+
+- Python 3.12, distributed under the Python Software Foundation License.
+- cryptography, distributed under the Apache License 2.0 or BSD License.
+- OpenSSL, distributed under the Apache License 2.0.
+- Tcl/Tk, distributed under the Tcl/Tk license terms.
+- Wintun prebuilt binaries, distributed under the license shown in the
+  application's About window.
+
+The complete Wintun prebuilt-binary license is embedded in pyvpn.exe and is
+also included in the release ZIP.

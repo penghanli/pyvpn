@@ -42,6 +42,7 @@ class ClientConfig:
     bypass_ips: list[str]
     stop_file: str | None
     dns_state_file: str | None = None
+    ready_file: str | None = None
 
 
 @dataclass
@@ -85,6 +86,7 @@ class VpnClient:
         self._stop = asyncio.Event()
 
     async def run(self) -> None:
+        self._clear_ready_file()
         current_platform = platform.system()
         if current_platform == "Linux":
             require_linux_root()
@@ -154,6 +156,7 @@ class VpnClient:
             )
             self.server_udp_addr = (self.session.udp_host, self.session.udp_port)
             self._send_udp(PACKET_TYPE_KEEPALIVE, b"")
+            self._write_ready_file()
             print("VPN tunnel is running", flush=True)
 
             tasks = [
@@ -179,7 +182,25 @@ class VpnClient:
                 await writer.wait_closed()
             except (ConnectionError, OSError, ssl.SSLError):
                 pass
-            await self.cleanup()
+            try:
+                await self.cleanup()
+            finally:
+                self._clear_ready_file()
+
+    def _write_ready_file(self) -> None:
+        if not self.config.ready_file:
+            return
+        ready_path = Path(self.config.ready_file)
+        ready_path.parent.mkdir(parents=True, exist_ok=True)
+        ready_path.write_text("ready\n", encoding="ascii")
+
+    def _clear_ready_file(self) -> None:
+        if not self.config.ready_file:
+            return
+        try:
+            Path(self.config.ready_file).unlink()
+        except OSError:
+            pass
 
     def _install_signal_handlers(self) -> None:
         loop = asyncio.get_running_loop()
@@ -371,6 +392,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--dns-state-file",
         help="macOS DNS backup state path; ignored on other platforms.",
     )
+    parser.add_argument(
+        "--ready-file",
+        help="Write this file after the VPN routes and DNS are ready, then remove it on exit.",
+    )
     return parser
 
 
@@ -415,6 +440,7 @@ async def async_main(argv: list[str] | None = None) -> None:
         bypass_ips=[resolve_ipv4(value) for value in bypass_ips],
         stop_file=args.stop_file,
         dns_state_file=args.dns_state_file,
+        ready_file=args.ready_file,
     )
     await VpnClient(config).run()
 

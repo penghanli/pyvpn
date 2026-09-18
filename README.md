@@ -45,6 +45,12 @@ Windows dependencies:
 The Windows installer handles the virtualenv, Python package dependencies, and
 Wintun download.
 
+For a no-install Windows x64 desktop client, build or download the standalone
+`pyvpn.exe` described in [`windows_gui/README.md`](windows_gui/README.md). It
+contains Python and Wintun, requests administrator access through UAC, and
+provides server add/edit/switch, control-port latency testing, connect, and
+disconnect controls.
+
 ## Server Setup
 
 ### Linux VPS

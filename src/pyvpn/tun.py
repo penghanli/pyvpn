@@ -179,6 +179,9 @@ def _find_wintun_dll() -> Path:
     env_path = os.environ.get("PYVPN_WINTUN_DLL")
     if env_path:
         candidates.append(Path(env_path))
+    bundle_dir = getattr(sys, "_MEIPASS", None)
+    if bundle_dir:
+        candidates.append(Path(bundle_dir) / "wintun.dll")
     candidates.append(Path(sys.executable).with_name("wintun.dll"))
     candidates.append(Path.cwd() / "wintun.dll")
     candidates.append(Path(__file__).resolve().parent / "wintun.dll")
