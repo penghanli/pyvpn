@@ -23,6 +23,9 @@ powershell -ExecutionPolicy Bypass -File .\install-client.ps1
 
 ## 连接
 
+客户端会等待服务端的加密 UDP 回包；若连接失败，请确认本机可向服务端发送
+UDP `8444`。TCP `8443` 能连通只代表控制连接成功。
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\pyvpn-client\pyvpn-client-up.ps1"
 ```
@@ -77,3 +80,7 @@ powershell -ExecutionPolicy Bypass -File ".\pyvpn-client\pyvpn-client-switch.ps1
 `token_id` 是用于和服务端状态对比的短标识，不是 Token。安装、
 连接、断开和节点管理均应在管理员 PowerShell 中运行。不要移动或删除安装后的
 `pyvpn-client` 目录。
+
+若连上后网页仍无法打开，请查看 `pyvpn-client\config\client.err.log`，
+并在管理员 PowerShell 中分别运行 `Test-NetConnection 1.1.1.1 -Port 443`
+和 `Resolve-DnsName www.microsoft.com`，以区分数据通道和 DNS 故障。

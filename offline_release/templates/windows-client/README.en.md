@@ -27,6 +27,9 @@ value as well.
 
 ## Connect
 
+The client waits for an authenticated UDP response from the server. A working
+TCP 8443 control connection alone does not confirm that UDP 8444 is reachable.
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\pyvpn-client\pyvpn-client-up.ps1"
 ```

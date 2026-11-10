@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import os
 import re
 import tarfile
+import zipfile
 from pathlib import Path
 
 OFFLINE_ROOT = Path(__file__).resolve().parents[1]
@@ -22,19 +24,38 @@ def _load_build_module():
 def test_expected_package_matrix_and_names() -> None:
     build = _load_build_module()
     expected = {
-        "pyvpn-offline-client-windows-x64-0.1.0-r6.zip",
-        "pyvpn-offline-client-linux-x86_64-0.1.0-r6.tar.gz",
-        "pyvpn-offline-server-linux-x86_64-0.1.0-r6.tar.gz",
-        "pyvpn-offline-client-linux-arm64-0.1.0-r6.tar.gz",
-        "pyvpn-offline-server-linux-arm64-0.1.0-r6.tar.gz",
-        "pyvpn-offline-client-macos-x86_64-0.1.0-r6.tar.gz",
-        "pyvpn-offline-client-macos-arm64-0.1.0-r6.tar.gz",
+        "pyvpn-offline-client-windows-x64-0.1.0-r7.zip",
+        "pyvpn-offline-client-linux-x86_64-0.1.0-r7.tar.gz",
+        "pyvpn-offline-server-linux-x86_64-0.1.0-r7.tar.gz",
+        "pyvpn-offline-client-linux-arm64-0.1.0-r7.tar.gz",
+        "pyvpn-offline-server-linux-arm64-0.1.0-r7.tar.gz",
+        "pyvpn-offline-client-macos-x86_64-0.1.0-r7.tar.gz",
+        "pyvpn-offline-client-macos-arm64-0.1.0-r7.tar.gz",
     }
     actual = {
         build._archive_name(target_platform, arch, role)
         for target_platform, arch, role in build.PACKAGE_MATRIX
     }
     assert actual == expected
+
+
+def test_windows_build_reuses_verified_wintun_cache(tmp_path: Path, monkeypatch) -> None:
+    build = _load_build_module()
+    cache = tmp_path / "build" / "windows_gui" / "vendor" / "wintun-0.14.1.zip"
+    cache.parent.mkdir(parents=True)
+    with zipfile.ZipFile(cache, "w") as bundle:
+        bundle.writestr("wintun/bin/amd64/wintun.dll", b"test-dll")
+        bundle.writestr("wintun/LICENSE.txt", "test-license")
+    monkeypatch.setattr(build, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(build, "WINTUN_SHA256", hashlib.sha256(cache.read_bytes()).hexdigest())
+
+    def fail_download(*_args):
+        raise AssertionError("a verified local cache should avoid the network")
+
+    monkeypatch.setattr(build.urllib.request, "urlretrieve", fail_download)
+    dll, license_path = build._download_wintun(tmp_path / "build" / "offline_release" / "new")
+    assert dll.read_bytes() == b"test-dll"
+    assert license_path.read_text(encoding="utf-8") == "test-license"
 
 
 def test_every_template_has_bilingual_readme_and_installer() -> None:
@@ -257,7 +278,7 @@ def test_assemble_all_platform_package(tmp_path: Path) -> None:
 
     all_archive = build.assemble_all(input_dir, output_dir)
 
-    assert all_archive.name == "pyvpn-offline-all-0.1.0-r6.zip"
+    assert all_archive.name == "pyvpn-offline-all-0.1.0-r7.zip"
     assert (output_dir / "SHA256SUMS").is_file()
     assert len(list(output_dir.iterdir())) == 9
     build.verify_archive(all_archive)

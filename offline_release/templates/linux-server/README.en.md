@@ -59,6 +59,9 @@ sudo pyvpn-server-restart
 
 `pyvpn-server-status` prints token IDs for both `server.env` and the running
 process. They must match, and the client `show` token ID must match them too.
+If control connects but data does not flow, check `pyvpn-server-logs` for
+`UDP path established` or `UDP path inactive` to see whether UDP 8444 reaches
+the server.
 
 The complete package, architecture, TUN device, and NAT tools are verified
 before system files are changed.

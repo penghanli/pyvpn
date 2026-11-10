@@ -427,7 +427,7 @@ $gateway = {_ps_quote(self.gateway)}
 $serverIps = {server_ips_ps}
 $tun = Get-NetAdapter -Name $tunName -ErrorAction Stop
 $default = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' |
-  Where-Object {{ $_.NextHop -ne '0.0.0.0' }} |
+  Where-Object {{ $_.InterfaceIndex -ne $tun.ifIndex }} |
   Sort-Object RouteMetric, InterfaceMetric |
   Select-Object -First 1
 if (-not $default) {{ throw 'Could not find the current IPv4 default route' }}
@@ -448,6 +448,22 @@ foreach ($prefix in @('0.0.0.0/1', '128.0.0.0/1')) {{
 }}
 
 {dns_script}
+
+foreach ($ip in $serverIps) {{
+  $selected = Find-NetRoute -RemoteIPAddress $ip -ErrorAction Stop |
+    Where-Object {{ $_.DestinationPrefix }} | Select-Object -Last 1
+  if (-not $selected -or $selected.InterfaceIndex -ne $default.InterfaceIndex) {{
+    throw "Server route to $ip does not use the physical adapter"
+  }}
+}}
+foreach ($ip in @('1.1.1.1', '129.0.0.1')) {{
+  if ($serverIps -contains $ip) {{ continue }}
+  $selected = Find-NetRoute -RemoteIPAddress $ip -ErrorAction Stop |
+    Where-Object {{ $_.DestinationPrefix }} | Select-Object -Last 1
+  if (-not $selected -or $selected.InterfaceIndex -ne $tun.ifIndex) {{
+    throw "VPN route to $ip does not use the Wintun adapter"
+  }}
+}}
 """
         run_powershell(script)
 

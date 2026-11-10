@@ -12,7 +12,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .errors import PlatformError
+from .errors import PlatformError, TunnelUnavailableError
 from .system import run, run_powershell
 
 TUNSETIFF = 0x400454CA
@@ -21,7 +21,7 @@ IFF_NO_PI = 0x1000
 ERROR_NO_MORE_ITEMS = 259
 ERROR_HANDLE_EOF = 38
 ERROR_BUFFER_OVERFLOW = 111
-INFINITE = 0xFFFFFFFF
+WINTUN_READ_WAIT_MS = 1000
 PF_SYSTEM = 32
 AF_SYSTEM = 32
 AF_SYS_CONTROL = 2
@@ -240,6 +240,8 @@ netsh interface ipv4 set subinterface $name mtu=$mtu store=active | Out-Null
     def _read_sync(self) -> bytes:
         packet_size = ctypes.c_uint32()
         while True:
+            if not self.session:
+                raise TunnelUnavailableError("Wintun adapter is terminating")
             packet = self.api.dll.WintunReceivePacket(self.session, ctypes.byref(packet_size))
             if packet:
                 try:
@@ -249,10 +251,10 @@ netsh interface ipv4 set subinterface $name mtu=$mtu store=active | Out-Null
             error = ctypes.get_last_error()
             if error == ERROR_NO_MORE_ITEMS:
                 event = self.api.dll.WintunGetReadWaitEvent(self.session)
-                self.api.kernel32.WaitForSingleObject(event, INFINITE)
+                self.api.kernel32.WaitForSingleObject(event, WINTUN_READ_WAIT_MS)
                 continue
             if error == ERROR_HANDLE_EOF:
-                raise PlatformError("Wintun adapter is terminating")
+                raise TunnelUnavailableError("Wintun adapter is terminating")
             raise PlatformError(f"WintunReceivePacket failed: {error}")
 
     async def write(self, packet: bytes) -> None:

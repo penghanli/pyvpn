@@ -70,7 +70,10 @@ class ActiveSession:
     replay: ReplayWindow = field(default_factory=ReplayWindow)
     client_addr: tuple[str, int] | None = None
     tx_seq: int = 0
+    created_at: float = field(default_factory=time.monotonic)
     last_seen: float = field(default_factory=time.monotonic)
+    last_udp_seen: float | None = None
+    udp_warning_logged: bool = False
     control_writer: object | None = None
 
     def next_seq(self) -> int:
@@ -186,6 +189,19 @@ class VpnServer:
                 await self._send_error(writer, "authentication failed")
                 return
 
+            client_id = str(hello.get("client_id") or "client")
+            previous = None
+            if hello.get("client_id"):
+                previous = next(
+                    (active for active in self.sessions_by_id.values() if active.client_id == client_id),
+                    None,
+                )
+            if previous is not None:
+                self._remove_session(previous)
+                if previous.control_writer is not None:
+                    previous.control_writer.close()
+                print(f"replaced previous session for client {client_id}", flush=True)
+
             if len(self.sessions_by_id) >= self.config.max_clients:
                 await self._send_error(
                     writer,
@@ -193,7 +209,6 @@ class VpnServer:
                 )
                 return
 
-            client_id = str(hello.get("client_id") or "client")
             client_vip = self._allocate_client_vip()
             if client_vip is None:
                 await self._send_error(writer, "server is full: no client address is available")
@@ -289,7 +304,14 @@ class VpnServer:
             if not session.replay.accept(header.seq):
                 return
             session.client_addr = addr
-            session.last_seen = time.monotonic()
+            now = time.monotonic()
+            session.last_seen = now
+            if session.last_udp_seen is None:
+                print(f"UDP path established for client {session.client_id}", flush=True)
+            elif session.udp_warning_logged:
+                print(f"UDP path recovered for client {session.client_id}", flush=True)
+            session.last_udp_seen = now
+            session.udp_warning_logged = False
 
             if header.packet_type == PACKET_TYPE_KEEPALIVE:
                 self._send_udp(session, PACKET_TYPE_KEEPALIVE, b"")
@@ -320,8 +342,17 @@ class VpnServer:
     async def session_timeout_loop(self) -> None:
         while True:
             await asyncio.sleep(5)
+            now = time.monotonic()
             for session in list(self.sessions_by_id.values()):
-                if time.monotonic() - session.last_seen <= self.config.session_timeout:
+                udp_reference = (
+                    session.last_udp_seen
+                    if session.last_udp_seen is not None
+                    else session.created_at
+                )
+                if now - udp_reference > 30 and not session.udp_warning_logged:
+                    print(f"UDP path inactive for client {session.client_id}", flush=True)
+                    session.udp_warning_logged = True
+                if now - session.last_seen <= self.config.session_timeout:
                     continue
                 print(f"client {session.client_id} timed out")
                 self._remove_session(session)

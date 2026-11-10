@@ -10,7 +10,9 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import traceback
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -19,6 +21,7 @@ from tkinter import font, messagebox, ttk
 
 from .auth import normalize_fingerprint
 from .client import async_main as client_async_main
+from .errors import TunnelUnavailableError
 from .profiles import (
     ProfileError,
     ServerProfile,
@@ -54,6 +57,7 @@ ACCENT = "#087f73"
 ACCENT_DARK = "#05665d"
 DANGER = "#b42318"
 WARNING = "#9a6700"
+RECONNECT_DELAYS = (1, 2, 4, 8)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -110,19 +114,20 @@ def _run_worker_with_logs(args: argparse.Namespace) -> int:
     except OSError:
         pass
 
-    client_args = [
-        "--profiles",
-        str(args.profiles),
-        "--server-id",
-        args.server_id,
-        "--stop-file",
-        str(args.stop_file),
-        "--ready-file",
-        str(args.ready_file),
-    ]
     try:
-        asyncio.run(client_async_main(client_args))
-        return 0
+        client_args = [
+            "--profiles",
+            str(args.profiles),
+            "--server-id",
+            args.server_id,
+            "--client-id",
+            _persistent_client_id(args.profiles.parent / "client.id"),
+            "--stop-file",
+            str(args.stop_file),
+            "--ready-file",
+            str(args.ready_file),
+        ]
+        return _run_client_with_retries(client_args, args.stop_file)
     except SystemExit as exc:
         if exc.code not in (None, 0):
             print(str(exc), file=sys.stderr, flush=True)
@@ -137,6 +142,50 @@ def _run_worker_with_logs(args: argparse.Namespace) -> int:
         except OSError:
             pass
         remove_pid_if_current(args.pid_file, pid)
+
+
+def _persistent_client_id(path: Path) -> str:
+    try:
+        return str(uuid.UUID(path.read_text(encoding="ascii").strip()))
+    except (OSError, ValueError):
+        identifier = str(uuid.uuid4())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(identifier + "\n", encoding="ascii")
+        os.replace(temporary, path)
+        return identifier
+
+
+def _run_client_with_retries(client_args: list[str], stop_file: Path) -> int:
+    def stop_requested() -> bool:
+        if not stop_file.is_file():
+            return False
+        try:
+            stop_file.unlink()
+        except OSError:
+            pass
+        return True
+
+    for attempt in range(len(RECONNECT_DELAYS) + 1):
+        if stop_requested():
+            return 0
+        try:
+            asyncio.run(client_async_main(client_args))
+            return 0
+        except (TunnelUnavailableError, TimeoutError, ConnectionError, OSError) as exc:
+            if stop_requested():
+                return 0
+            if attempt == len(RECONNECT_DELAYS):
+                print(f"connection recovery failed: {exc}", file=sys.stderr, flush=True)
+                return 1
+            delay = RECONNECT_DELAYS[attempt]
+            print(f"connection interrupted: {exc}; retrying in {delay}s", file=sys.stderr, flush=True)
+            deadline = time.monotonic() + delay
+            while time.monotonic() < deadline:
+                if stop_requested():
+                    return 0
+                time.sleep(min(0.2, max(0, deadline - time.monotonic())))
+    return 1
 
 
 def _set_dpi_awareness() -> None:
@@ -519,7 +568,7 @@ class PyVpnWindowsApp:
         except ProfileError:
             has_servers = False
         self.speed_button.configure(state="normal" if has_servers else "disabled")
-        if self.connection_state in {"connecting", "disconnecting"}:
+        if self.connection_state == "disconnecting":
             self.connect_button.configure(state="disabled")
         else:
             self.connect_button.configure(state="normal" if has_servers else "disabled")
@@ -803,9 +852,7 @@ class PyVpnWindowsApp:
         if running_pid:
             if self.connection_state == "disconnecting" or self.expected_stop:
                 self.connection_state = "disconnecting"
-            elif self.paths.ready.is_file() or "VPN tunnel is running" in tail_text(
-                self.paths.log, max_bytes=4096
-            ):
+            elif self.paths.ready.is_file():
                 self.connection_state = "connected"
             else:
                 self.connection_state = "connecting"
@@ -843,7 +890,7 @@ class PyVpnWindowsApp:
         elif state == "connecting":
             label = f"正在连接 {server}..." if server else "正在连接..."
             self.status_label.configure(text=label, foreground=WARNING)
-            self.connect_button.configure(text="连接中...", state="disabled")
+            self.connect_button.configure(text="取消连接", state="normal")
         elif state == "disconnecting":
             self.status_label.configure(text="正在断开...", foreground=WARNING)
             self.connect_button.configure(text="断开中...", state="disabled")

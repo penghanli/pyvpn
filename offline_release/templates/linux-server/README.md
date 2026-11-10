@@ -57,5 +57,8 @@ sudo pyvpn-server-restart
 
 `pyvpn-server-status` 会同时打印 `server.env` 配置和运行中进程的 `token_id`；
 两者必须一致，客户端 `show` 输出的 `token_id` 也应与它们一致。
+若控制连接成功但无法上网，可在 `pyvpn-server-logs` 中查看
+`UDP path established` 或 `UDP path inactive`，确认客户端 UDP `8444`
+是否到达服务端。
 
 安装器会在修改系统前验证完整压缩包、架构、TUN 和 NAT 工具。

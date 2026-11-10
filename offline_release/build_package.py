@@ -189,8 +189,29 @@ def _download_wintun(work_dir: Path) -> tuple[Path, Path]:
     archive = work_dir / "wintun-0.14.1.zip"
     if not archive.exists() or _sha256(archive) != WINTUN_SHA256:
         archive.parent.mkdir(parents=True, exist_ok=True)
-        print(f"Downloading {WINTUN_URL}", flush=True)
-        urllib.request.urlretrieve(WINTUN_URL, archive)
+        cache = REPO_ROOT / "build" / "windows_gui" / "vendor" / archive.name
+        candidates = [
+            cache,
+            *sorted((REPO_ROOT / "build" / "offline_release").glob(f"*/{archive.name}")),
+        ]
+        verified = next(
+            (
+                candidate
+                for candidate in candidates
+                if candidate != archive and candidate.is_file()
+                and _sha256(candidate) == WINTUN_SHA256
+            ),
+            None,
+        )
+        if verified is not None:
+            shutil.copy2(verified, archive)
+        else:
+            print(f"Downloading {WINTUN_URL}", flush=True)
+            try:
+                urllib.request.urlretrieve(WINTUN_URL, archive)
+            except Exception:
+                archive.unlink(missing_ok=True)
+                raise
     actual = _sha256(archive)
     if actual != WINTUN_SHA256:
         raise RuntimeError(f"Wintun SHA-256 mismatch: expected {WINTUN_SHA256}, got {actual}")

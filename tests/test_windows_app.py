@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
+
+import pytest
 
 from pyvpn import tun
+from pyvpn import routes
 from pyvpn.client import ClientConfig, VpnClient
 from pyvpn.windows_app import (
     WINDOWS_APP_VERSION,
@@ -103,3 +108,32 @@ def test_windows_build_requests_single_file_uac_executable() -> None:
     assert '"--windowed"' in source
     assert '"--uac-admin"' in source
     assert '"--add-binary"' in source
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows PowerShell")
+def test_windows_route_setup_script_parses(monkeypatch) -> None:
+    scripts: list[str] = []
+    monkeypatch.setattr(routes, "run_powershell", lambda script: scripts.append(script))
+    network = routes.WindowsClientNetwork(
+        tun_name="pyvpn0",
+        server_ips=["203.0.113.10"],
+        gateway="10.8.0.1",
+        dns="1.1.1.1",
+    )
+    network.setup()
+
+    assert "Find-NetRoute -RemoteIPAddress $ip" in scripts[0]
+    parser = (
+        "$tokens=$null;$errors=$null;"
+        "[System.Management.Automation.Language.Parser]::ParseInput("
+        "[Console]::In.ReadToEnd(),[ref]$tokens,[ref]$errors)|Out-Null;"
+        "if($errors.Count){$errors|ForEach-Object{$_.Message};exit 1}"
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", parser],
+        input=scripts[0],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout

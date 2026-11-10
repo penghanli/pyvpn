@@ -13,7 +13,10 @@ target computer does not need Python or an internet connection.
 4. Test all measures TCP control-port connection latency. It is not a
    bandwidth measurement.
 
-Profiles and logs normally stay in `pyvpn-data` beside the executable. When
+Connected means an authenticated UDP response was received from the server.
+The app retries after a network change; Connect can be cancelled while pending.
+
+Profiles, the client ID, and logs normally stay in `pyvpn-data` beside the executable. When
 the executable is placed in the root of an installed Windows offline package,
 it reuses `pyvpn-client\config\servers.json`, so the command-line scripts and
 GUI share the same servers. `PYVPN_GUI_DATA_DIR` can override the data
@@ -24,6 +27,7 @@ in the server list, but they are stored in plaintext in the local
 `servers.json`; do not share the data directory or profile file. The app tries
 to restrict a newly created data directory to Windows Administrators and
 SYSTEM. Every connection validates the configured certificate fingerprint.
+Keep `pyvpn-data` when replacing the EXE to retain profiles and the client ID.
 
 ## Build
 

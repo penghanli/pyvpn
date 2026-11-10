@@ -15,3 +15,7 @@ class PlatformError(PyVpnError):
 
 class AuthenticationError(PyVpnError):
     """Raised when authentication or certificate pinning fails."""
+
+
+class TunnelUnavailableError(PyVpnError):
+    """Raised when the encrypted UDP tunnel cannot exchange packets."""

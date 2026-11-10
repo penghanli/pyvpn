@@ -277,6 +277,8 @@ $pidPath = Join-Path $ConfigDir "client.pid"
 $logPath = Join-Path $ConfigDir "client.log"
 $errLogPath = Join-Path $ConfigDir "client.err.log"
 $stopPath = Join-Path $ConfigDir "client.stop"
+$readyPath = Join-Path $ConfigDir "client.ready"
+$clientIdPath = Join-Path $ConfigDir "client.id"
 
 $wasRunning = $false
 if (Test-Path -LiteralPath $pidPath -PathType Leaf) {
@@ -367,11 +369,22 @@ try {
 @"
 `$ErrorActionPreference = "Stop"
 `$runtimeExe = $(Quote-PowerShellString $runtimeExe)
+`$clientIdPath = $(Quote-PowerShellString $clientIdPath)
+if (Test-Path -LiteralPath `$clientIdPath) {
+  `$clientId = (Get-Content -Raw -LiteralPath `$clientIdPath).Trim()
+} else {
+  `$clientId = [Guid]::NewGuid().ToString()
+  Set-Content -Encoding ASCII -LiteralPath `$clientIdPath -Value `$clientId
+}
 `$clientArgs = @(
   "--profiles",
   $(Quote-PowerShellString $profilesPath),
+  "--client-id",
+  `$clientId,
   "--stop-file",
-  $(Quote-PowerShellString $stopPath)
+  $(Quote-PowerShellString $stopPath),
+  "--ready-file",
+  $(Quote-PowerShellString $readyPath)
 )
 & `$runtimeExe @clientArgs
 exit `$LASTEXITCODE
@@ -388,6 +401,7 @@ if (-not `$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administr
 `$logPath = $(Quote-PowerShellString $logPath)
 `$errLogPath = $(Quote-PowerShellString $errLogPath)
 `$stopPath = $(Quote-PowerShellString $stopPath)
+`$readyPath = $(Quote-PowerShellString $readyPath)
 `$startScript = $(Quote-PowerShellString $startScript)
 `$powershellExe = Join-Path `$PSHOME "powershell.exe"
 Remove-Item -Force `$stopPath -ErrorAction SilentlyContinue
@@ -403,6 +417,7 @@ if (Test-Path `$pidPath) {
 if (`$otherClients.Count -gt 0) {
   throw "Another pyvpn client is running. Disconnect the old version before starting this one."
 }
+Remove-Item -Force `$readyPath -ErrorAction SilentlyContinue
 `$quotedStartScript = '"' + `$startScript + '"'
 `$startProcessParams = @{
   FilePath = `$powershellExe
@@ -414,14 +429,23 @@ if (`$otherClients.Count -gt 0) {
 }
 `$process = Start-Process @startProcessParams
 Set-Content -Encoding ASCII -Path `$pidPath -Value ([string]`$process.Id)
-Start-Sleep -Seconds 2
-if (-not (Get-Process -Id `$process.Id -ErrorAction SilentlyContinue)) {
+`$deadline = (Get-Date).AddSeconds(35)
+while ((Get-Date) -lt `$deadline) {
+  if (Test-Path -LiteralPath `$readyPath) { break }
+  if (-not (Get-Process -Id `$process.Id -ErrorAction SilentlyContinue)) { break }
+  Start-Sleep -Milliseconds 250
+}
+if (-not (Test-Path -LiteralPath `$readyPath)) {
   if (Test-Path `$logPath) { Get-Content `$logPath -Tail 80 }
   if (Test-Path `$errLogPath) { Get-Content `$errLogPath -Tail 80 }
-  Remove-Item -Force `$pidPath -ErrorAction SilentlyContinue
-  throw "pyvpn client failed to start"
+  if (Get-Process -Id `$process.Id -ErrorAction SilentlyContinue) {
+    Set-Content -Encoding ASCII -Path `$stopPath -Value "stop"
+  } else {
+    Remove-Item -Force `$pidPath -ErrorAction SilentlyContinue
+  }
+  throw "pyvpn client did not establish the encrypted UDP tunnel"
 }
-Write-Host "pyvpn client started in the background with PID `$(`$process.Id)"
+Write-Host "pyvpn encrypted UDP tunnel is ready with PID `$(`$process.Id)"
 Write-Host "Log: `$logPath"
 Write-Host "Error log: `$errLogPath"
 "@ | Set-Content -Encoding UTF8 -Path $upScript
@@ -432,6 +456,7 @@ Write-Host "Error log: `$errLogPath"
 `$logPath = $(Quote-PowerShellString $logPath)
 `$errLogPath = $(Quote-PowerShellString $errLogPath)
 `$stopPath = $(Quote-PowerShellString $stopPath)
+`$readyPath = $(Quote-PowerShellString $readyPath)
 `$profilesPath = $(Quote-PowerShellString $profilesPath)
 if (Test-Path `$pidPath) {
   `$pidValue = [int](Get-Content -Raw `$pidPath)
@@ -443,7 +468,7 @@ if (Test-Path `$pidPath) {
     if (`$process) { Stop-Process -Id `$pidValue -Force -ErrorAction SilentlyContinue }
   }
 }
-Remove-Item -Force `$pidPath, `$stopPath -ErrorAction SilentlyContinue
+Remove-Item -Force `$pidPath, `$stopPath, `$readyPath -ErrorAction SilentlyContinue
 if (Test-Path `$profilesPath) {
   try {
     `$store = Get-Content -Raw `$profilesPath | ConvertFrom-Json
@@ -498,12 +523,17 @@ Write-Host "Error log: `$errLogPath"
 `$pidPath = $(Quote-PowerShellString $pidPath)
 `$logPath = $(Quote-PowerShellString $logPath)
 `$errLogPath = $(Quote-PowerShellString $errLogPath)
+`$readyPath = $(Quote-PowerShellString $readyPath)
 `$runtimeExe = $(Quote-PowerShellString $runtimeExe)
 `$profilesPath = $(Quote-PowerShellString $profilesPath)
 if (Test-Path `$pidPath) {
   `$pidValue = [int](Get-Content -Raw `$pidPath)
   if (Get-Process -Id `$pidValue -ErrorAction SilentlyContinue) {
-    Write-Host "pyvpn client is running with PID `$pidValue"
+    if (Test-Path -LiteralPath `$readyPath) {
+      Write-Host "pyvpn encrypted UDP tunnel is ready with PID `$pidValue"
+    } else {
+      Write-Host "pyvpn client is connecting with PID `$pidValue"
+    }
   } else {
     Write-Host "pyvpn client PID file exists, but the process is not running"
   }

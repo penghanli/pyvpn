@@ -237,6 +237,9 @@ jobs:
                   File.WriteAllLines(output, args);
                   int stopIndex = Array.IndexOf(args, "--stop-file");
                   if (stopIndex < 0 || stopIndex + 1 >= args.Length) return 3;
+                  int readyIndex = Array.IndexOf(args, "--ready-file");
+                  if (readyIndex < 0 || readyIndex + 1 >= args.Length) return 5;
+                  File.WriteAllText(args[readyIndex + 1], "ready");
                   for (int i = 0; i < 300; i++)
                   {
                       if (File.Exists(args[stopIndex + 1])) return 0;
@@ -254,9 +257,12 @@ jobs:
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $upScript
             if ($LASTEXITCODE -ne 0) { throw "Generated up launcher failed." }
             $actualArguments = @(Get-Content -LiteralPath $argumentsFile)
+            $clientId = (Get-Content -Raw (Join-Path $configDir "client.id")).Trim()
             $expectedArguments = @(
               "--profiles", $profilesPath,
-              "--stop-file", (Join-Path $configDir "client.stop")
+              "--client-id", $clientId,
+              "--stop-file", (Join-Path $configDir "client.stop"),
+              "--ready-file", (Join-Path $configDir "client.ready")
             )
             if (($actualArguments -join "`n") -ne ($expectedArguments -join "`n")) {
               throw "Generated start launcher did not preserve argument boundaries."

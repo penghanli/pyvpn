@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Mapping
 
 
-WINDOWS_APP_VERSION = "0.1.0-r1"
+WINDOWS_APP_VERSION = "0.1.0-r2"
 
 
 @dataclass(frozen=True)

@@ -17,7 +17,7 @@ from pathlib import Path
 from .auth import certificate_fingerprint, normalize_fingerprint, token_identifier
 from .constants import CONTROL_VERSION, DEFAULT_MTU, PACKET_TYPE_DATA, PACKET_TYPE_KEEPALIVE
 from .crypto import SessionKeys, TunnelCipher
-from .errors import AuthenticationError, ProtocolError
+from .errors import AuthenticationError, ProtocolError, TunnelUnavailableError
 from .framing import read_frame, write_frame
 from .ip import inspect_ipv4
 from .packet import open_packet, parse_header, seal_packet
@@ -27,6 +27,14 @@ from .routes import LinuxClientNetwork, MacClientNetwork, resolve_ipv4
 from .routes import WindowsClientNetwork
 from .system import require_linux_root, require_macos_root, require_windows_admin
 from .tun import TunDevice, create_tun
+
+
+CONTROL_CONNECT_TIMEOUT = 12.0
+CONTROL_ACCEPT_TIMEOUT = 10.0
+UDP_PROBE_TIMEOUT = 8.0
+UDP_PROBE_INTERVAL = 1.0
+UDP_KEEPALIVE_INTERVAL = 10.0
+UDP_STALE_TIMEOUT = 40.0
 
 
 @dataclass
@@ -84,6 +92,8 @@ class VpnClient:
         self.session: ClientSession | None = None
         self.server_udp_addr: tuple[str, int] | None = None
         self._stop = asyncio.Event()
+        self._udp_received = asyncio.Event()
+        self._last_udp_received: float | None = None
 
     async def run(self) -> None:
         self._clear_ready_file()
@@ -105,10 +115,15 @@ class VpnClient:
         )
         server_ip = resolve_ipv4(self.config.server_host)
         print(f"resolved server IPv4: {server_ip}", flush=True)
-        reader, writer = await self._open_control()
+        try:
+            reader, writer = await asyncio.wait_for(
+                self._open_control(server_ip), timeout=CONTROL_CONNECT_TIMEOUT
+            )
+        except TimeoutError as exc:
+            raise TunnelUnavailableError("control connection timed out") from exc
         try:
             await self._send_hello(writer)
-            accept = await read_frame(reader)
+            accept = await asyncio.wait_for(read_frame(reader), timeout=CONTROL_ACCEPT_TIMEOUT)
             if accept.get("type") == "error":
                 message = str(accept.get("message", "server rejected client"))
                 if message == "authentication failed":
@@ -155,7 +170,7 @@ class VpnClient:
                 local_addr=("0.0.0.0", 0),
             )
             self.server_udp_addr = (self.session.udp_host, self.session.udp_port)
-            self._send_udp(PACKET_TYPE_KEEPALIVE, b"")
+            await self._await_udp_ready()
             self._write_ready_file()
             print("VPN tunnel is running", flush=True)
 
@@ -177,15 +192,41 @@ class VpnClient:
                 await write_frame(writer, {"type": "disconnect"})
             except Exception:  # noqa: BLE001
                 pass
+            self._clear_ready_file()
             writer.close()
             try:
-                await writer.wait_closed()
-            except (ConnectionError, OSError, ssl.SSLError):
+                await asyncio.wait_for(writer.wait_closed(), timeout=5)
+            except (ConnectionError, OSError, ssl.SSLError, TimeoutError):
                 pass
             try:
                 await self.cleanup()
             finally:
                 self._clear_ready_file()
+
+    async def _await_udp_ready(self) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + UDP_PROBE_TIMEOUT
+        while not self._udp_received.is_set():
+            self._send_udp(PACKET_TYPE_KEEPALIVE, b"")
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            try:
+                await asyncio.wait_for(
+                    self._udp_received.wait(), timeout=min(UDP_PROBE_INTERVAL, remaining)
+                )
+            except TimeoutError:
+                pass
+        if not self._udp_received.is_set():
+            raise TunnelUnavailableError(
+                "UDP tunnel did not respond; check outbound UDP to "
+                f"{self.server_udp_addr[0]}:{self.server_udp_addr[1]}"
+            )
+        print("encrypted UDP path confirmed", flush=True)
+
+    def _check_udp_health(self, now: float) -> None:
+        if self._last_udp_received is not None and now - self._last_udp_received > UDP_STALE_TIMEOUT:
+            raise TunnelUnavailableError("UDP tunnel stopped responding; reconnecting")
 
     def _write_ready_file(self) -> None:
         if not self.config.ready_file:
@@ -213,12 +254,12 @@ class VpnClient:
             except NotImplementedError:
                 signal.signal(sig, lambda _signum, _frame: self._stop.set())
 
-    async def _open_control(self):
+    async def _open_control(self, server_ip: str):
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         reader, writer = await asyncio.open_connection(
-            self.config.server_host,
+            server_ip,
             self.config.control_port,
             ssl=context,
             server_hostname=None,
@@ -297,6 +338,8 @@ class VpnClient:
             header, plaintext = open_packet(data, session.s2c_cipher)
             if not session.replay.accept(header.seq):
                 return
+            self._last_udp_received = asyncio.get_running_loop().time()
+            self._udp_received.set()
             if header.packet_type == PACKET_TYPE_KEEPALIVE:
                 return
             info = inspect_ipv4(plaintext)
@@ -313,11 +356,14 @@ class VpnClient:
             response = await asyncio.wait_for(read_frame(reader), timeout=10)
             if response.get("type") == "error":
                 raise ProtocolError(str(response.get("message", "server error")))
+            if response.get("type") != "heartbeat":
+                raise ProtocolError("server did not acknowledge heartbeat")
 
     async def udp_keepalive_loop(self) -> None:
         while True:
-            await asyncio.sleep(10)
+            await asyncio.sleep(UDP_KEEPALIVE_INTERVAL)
             self._send_udp(PACKET_TYPE_KEEPALIVE, b"")
+            self._check_udp_health(asyncio.get_running_loop().time())
 
     async def stop_file_loop(self) -> None:
         if not self.config.stop_file:
