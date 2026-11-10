@@ -428,7 +428,7 @@ $serverIps = {server_ips_ps}
 $tun = Get-NetAdapter -Name $tunName -ErrorAction Stop
 $default = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' |
   Where-Object {{ $_.InterfaceIndex -ne $tun.ifIndex }} |
-  Sort-Object RouteMetric, InterfaceMetric |
+  Sort-Object @{{ Expression = {{ $_.RouteMetric + $_.InterfaceMetric }} }} |
   Select-Object -First 1
 if (-not $default) {{ throw 'Could not find the current IPv4 default route' }}
 
@@ -448,12 +448,46 @@ foreach ($prefix in @('0.0.0.0/1', '128.0.0.0/1')) {{
 }}
 
 {dns_script}
+{self._verification_checks_script()}
+"""
+        run_powershell(script)
 
+    def verify(self) -> None:
+        unique_server_ips = list(dict.fromkeys(self.server_ips))
+        server_ips_ps = "@(" + ",".join(_ps_quote(ip) for ip in unique_server_ips) + ")"
+        script = f"""
+$ErrorActionPreference = 'Stop'
+$tunName = {_ps_quote(self.tun_name)}
+$serverIps = {server_ips_ps}
+$tun = Get-NetAdapter -Name $tunName -ErrorAction Stop
+$default = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' |
+  Where-Object {{ $_.InterfaceIndex -ne $tun.ifIndex }} |
+  Sort-Object @{{ Expression = {{ $_.RouteMetric + $_.InterfaceMetric }} }} |
+  Select-Object -First 1
+if (-not $default) {{ throw 'Physical IPv4 default route is missing' }}
+{self._verification_checks_script()}
+"""
+        run_powershell(script)
+
+    def _verification_checks_script(self) -> str:
+        dns_check = ""
+        if self.manage_dns:
+            dns_check = f"""
+$dnsServers = @(Get-DnsClientServerAddress -InterfaceIndex $tun.ifIndex `
+  -AddressFamily IPv4 -ErrorAction Stop).ServerAddresses
+if ($dnsServers -notcontains {_ps_quote(self.dns)}) {{
+  throw 'VPN DNS server was changed'
+}}
+"""
+        return f"""
+if ($tun.Status -ne 'Up') {{ throw 'Wintun adapter is not up' }}
 foreach ($ip in $serverIps) {{
   $selected = Find-NetRoute -RemoteIPAddress $ip -ErrorAction Stop |
     Where-Object {{ $_.DestinationPrefix }} | Select-Object -Last 1
-  if (-not $selected -or $selected.InterfaceIndex -ne $default.InterfaceIndex) {{
-    throw "Server route to $ip does not use the physical adapter"
+  if (-not $selected -or $selected.DestinationPrefix -ne "$ip/32" -or
+      $selected.InterfaceIndex -ne $default.InterfaceIndex -or
+      $selected.NextHop -ne $default.NextHop) {{
+    throw "Server bypass route to $ip changed"
   }}
 }}
 foreach ($ip in @('1.1.1.1', '129.0.0.1')) {{
@@ -464,8 +498,8 @@ foreach ($ip in @('1.1.1.1', '129.0.0.1')) {{
     throw "VPN route to $ip does not use the Wintun adapter"
   }}
 }}
+{dns_check}
 """
-        run_powershell(script)
 
     def cleanup(self) -> None:
         unique_server_ips = list(dict.fromkeys(self.server_ips))

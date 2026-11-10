@@ -22,6 +22,9 @@ ERROR_NO_MORE_ITEMS = 259
 ERROR_HANDLE_EOF = 38
 ERROR_BUFFER_OVERFLOW = 111
 WINTUN_READ_WAIT_MS = 1000
+WINTUN_RING_CAPACITY = 0x1000000
+WINTUN_FALLBACK_RING_CAPACITY = 0x400000
+WINTUN_READ_BATCH_SIZE = 64
 PF_SYSTEM = 32
 AF_SYSTEM = 32
 AF_SYS_CONTROL = 2
@@ -37,6 +40,9 @@ class TunDevice:
 
     async def read(self) -> bytes:
         raise NotImplementedError
+
+    async def read_batch(self) -> list[bytes]:
+        return [await self.read()]
 
     async def write(self, packet: bytes) -> None:
         raise NotImplementedError
@@ -208,7 +214,9 @@ class WindowsTunDevice(TunDevice):
         if not adapter:
             raise PlatformError(f"WintunCreateAdapter failed: {ctypes.get_last_error()}")
 
-        session = api.dll.WintunStartSession(adapter, 0x400000)
+        session = api.dll.WintunStartSession(adapter, WINTUN_RING_CAPACITY)
+        if not session:
+            session = api.dll.WintunStartSession(adapter, WINTUN_FALLBACK_RING_CAPACITY)
         if not session:
             api.dll.WintunCloseAdapter(adapter)
             raise PlatformError(f"WintunStartSession failed: {ctypes.get_last_error()}")
@@ -235,27 +243,35 @@ netsh interface ipv4 set subinterface $name mtu=$mtu store=active | Out-Null
         run_powershell(script)
 
     async def read(self) -> bytes:
-        return await asyncio.to_thread(self._read_sync)
+        return (await asyncio.to_thread(self._read_batch_sync, 1))[0]
 
-    def _read_sync(self) -> bytes:
+    async def read_batch(self) -> list[bytes]:
+        return await asyncio.to_thread(self._read_batch_sync)
+
+    def _read_batch_sync(self, max_packets: int = WINTUN_READ_BATCH_SIZE) -> list[bytes]:
+        packets: list[bytes] = []
         packet_size = ctypes.c_uint32()
-        while True:
+        while len(packets) < max_packets:
             if not self.session:
                 raise TunnelUnavailableError("Wintun adapter is terminating")
             packet = self.api.dll.WintunReceivePacket(self.session, ctypes.byref(packet_size))
             if packet:
                 try:
-                    return ctypes.string_at(packet, packet_size.value)
+                    packets.append(ctypes.string_at(packet, packet_size.value))
                 finally:
                     self.api.dll.WintunReleaseReceivePacket(self.session, packet)
+                continue
             error = ctypes.get_last_error()
             if error == ERROR_NO_MORE_ITEMS:
+                if packets:
+                    return packets
                 event = self.api.dll.WintunGetReadWaitEvent(self.session)
                 self.api.kernel32.WaitForSingleObject(event, WINTUN_READ_WAIT_MS)
                 continue
             if error == ERROR_HANDLE_EOF:
                 raise TunnelUnavailableError("Wintun adapter is terminating")
             raise PlatformError(f"WintunReceivePacket failed: {error}")
+        return packets
 
     async def write(self, packet: bytes) -> None:
         await asyncio.to_thread(self._write_sync, packet)

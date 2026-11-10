@@ -33,6 +33,7 @@ from .packet import open_packet, parse_header, seal_packet
 from .replay import ReplayWindow
 from .system import require_linux_root
 from .tun import LinuxTunDevice
+from .udp import create_udp_endpoint
 
 DEFAULT_MAX_CLIENTS = 5
 MIN_MAX_CLIENTS = 1
@@ -119,9 +120,9 @@ class VpnServer:
         loop = asyncio.get_running_loop()
         await self._install_signal_handlers(loop)
 
-        self.udp_transport, _ = await loop.create_datagram_endpoint(
+        self.udp_transport, _ = await create_udp_endpoint(
             lambda: ServerUdpProtocol(self),
-            local_addr=(self.config.listen_host, self.config.udp_port),
+            (self.config.listen_host, self.config.udp_port),
         )
 
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -328,8 +329,13 @@ class VpnServer:
     async def tun_to_udp_loop(self) -> None:
         if self.tun is None:
             return
+        processed = 0
         while True:
             packet = await self.tun.read()
+            processed += 1
+            if processed == 64:
+                processed = 0
+                await asyncio.sleep(0)
             try:
                 info = inspect_ipv4(packet)
             except ProtocolError:

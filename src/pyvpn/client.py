@@ -17,7 +17,7 @@ from pathlib import Path
 from .auth import certificate_fingerprint, normalize_fingerprint, token_identifier
 from .constants import CONTROL_VERSION, DEFAULT_MTU, PACKET_TYPE_DATA, PACKET_TYPE_KEEPALIVE
 from .crypto import SessionKeys, TunnelCipher
-from .errors import AuthenticationError, ProtocolError, TunnelUnavailableError
+from .errors import AuthenticationError, PlatformError, ProtocolError, TunnelUnavailableError
 from .framing import read_frame, write_frame
 from .ip import inspect_ipv4
 from .packet import open_packet, parse_header, seal_packet
@@ -27,6 +27,7 @@ from .routes import LinuxClientNetwork, MacClientNetwork, resolve_ipv4
 from .routes import WindowsClientNetwork
 from .system import require_linux_root, require_macos_root, require_windows_admin
 from .tun import TunDevice, create_tun
+from .udp import create_udp_endpoint
 
 
 CONTROL_CONNECT_TIMEOUT = 12.0
@@ -35,6 +36,7 @@ UDP_PROBE_TIMEOUT = 8.0
 UDP_PROBE_INTERVAL = 1.0
 UDP_KEEPALIVE_INTERVAL = 10.0
 UDP_STALE_TIMEOUT = 40.0
+WINDOWS_ROUTE_CHECK_INTERVAL = 60.0
 
 
 @dataclass
@@ -161,13 +163,16 @@ class VpnClient:
             if current_platform == "Darwin" and self.config.dns_state_file:
                 network_kwargs["dns_state_path"] = Path(self.config.dns_state_file)
             self.network = network_cls(**network_kwargs)
-            self.network.setup()
+            try:
+                self.network.setup()
+            except PlatformError as exc:
+                if current_platform != "Windows":
+                    raise
+                raise TunnelUnavailableError(f"Windows network setup failed: {exc}") from exc
             print("client routes and DNS configured", flush=True)
 
-            loop = asyncio.get_running_loop()
-            self.udp_transport, _ = await loop.create_datagram_endpoint(
-                lambda: ClientUdpProtocol(self),
-                local_addr=("0.0.0.0", 0),
+            self.udp_transport, _ = await create_udp_endpoint(
+                lambda: ClientUdpProtocol(self), ("0.0.0.0", 0)
             )
             self.server_udp_addr = (self.session.udp_host, self.session.udp_port)
             await self._await_udp_ready()
@@ -181,6 +186,8 @@ class VpnClient:
                 asyncio.create_task(self.stop_file_loop()),
                 asyncio.create_task(self._stop.wait()),
             ]
+            if isinstance(self.network, WindowsClientNetwork):
+                tasks.append(asyncio.create_task(self.windows_route_health_loop()))
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()
@@ -317,15 +324,30 @@ class VpnClient:
     async def tun_to_udp_loop(self) -> None:
         if self.tun is None:
             return
+        processed = 0
         while True:
-            packet = await self.tun.read()
+            for packet in await self.tun.read_batch():
+                processed += 1
+                if processed == 64:
+                    processed = 0
+                    await asyncio.sleep(0)
+                try:
+                    info = inspect_ipv4(packet)
+                except ProtocolError:
+                    continue
+                if str(info.source) != self.session.client_vip:
+                    continue
+                self._send_udp(PACKET_TYPE_DATA, packet[: info.total_length])
+
+    async def windows_route_health_loop(self) -> None:
+        if not isinstance(self.network, WindowsClientNetwork):
+            return
+        while True:
+            await asyncio.sleep(WINDOWS_ROUTE_CHECK_INTERVAL)
             try:
-                info = inspect_ipv4(packet)
-            except ProtocolError:
-                continue
-            if str(info.source) != self.session.client_vip:
-                continue
-            self._send_udp(PACKET_TYPE_DATA, packet[: info.total_length])
+                await asyncio.to_thread(self.network.verify)
+            except PlatformError as exc:
+                raise TunnelUnavailableError(f"Windows route or DNS changed: {exc}") from exc
 
     async def handle_udp_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         session = self.session

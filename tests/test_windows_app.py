@@ -121,19 +121,25 @@ def test_windows_route_setup_script_parses(monkeypatch) -> None:
         dns="1.1.1.1",
     )
     network.setup()
+    network.verify()
 
+    assert len(scripts) == 2
     assert "Find-NetRoute -RemoteIPAddress $ip" in scripts[0]
+    assert "Find-NetRoute -RemoteIPAddress $ip" in scripts[1]
+    assert "Server bypass route to $ip changed" in scripts[1]
+    assert "Get-DnsClientServerAddress" in scripts[1]
     parser = (
         "$tokens=$null;$errors=$null;"
         "[System.Management.Automation.Language.Parser]::ParseInput("
         "[Console]::In.ReadToEnd(),[ref]$tokens,[ref]$errors)|Out-Null;"
         "if($errors.Count){$errors|ForEach-Object{$_.Message};exit 1}"
     )
-    result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-Command", parser],
-        input=scripts[0],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr or result.stdout
+    for script in scripts:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", parser],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout

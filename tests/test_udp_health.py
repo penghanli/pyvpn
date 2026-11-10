@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 from pathlib import Path
 
 import pytest
 
 from pyvpn import client as client_module
 from pyvpn.client import ClientConfig, ClientSession, VpnClient
-from pyvpn.constants import PACKET_TYPE_KEEPALIVE
+from pyvpn.constants import PACKET_TYPE_DATA, PACKET_TYPE_KEEPALIVE
 from pyvpn.crypto import TunnelCipher, new_session_keys
-from pyvpn.errors import AuthenticationError, TunnelUnavailableError
-from pyvpn.packet import seal_packet
+from pyvpn.errors import AuthenticationError, PlatformError, TunnelUnavailableError
+from pyvpn.packet import open_packet, seal_packet
+from pyvpn.routes import WindowsClientNetwork
 
 
 class FakeUdpTransport:
@@ -110,6 +112,85 @@ def test_windows_worker_retries_transient_failure(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr(windows_gui, "RECONNECT_DELAYS", (0, 0))
     assert windows_gui._run_client_with_retries([], tmp_path / "stop") == 0
     assert attempts == 3
+
+
+def test_windows_worker_keeps_retrying_until_network_recovers(monkeypatch, tmp_path: Path) -> None:
+    windows_gui = pytest.importorskip("pyvpn.windows_gui")
+    attempts = 0
+
+    async def flaky_client(_args: list[str]) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 10:
+            raise TunnelUnavailableError("temporary network loss")
+
+    monkeypatch.setattr(windows_gui, "client_async_main", flaky_client)
+    monkeypatch.setattr(windows_gui, "RECONNECT_DELAYS", (0,))
+    assert windows_gui._run_client_with_retries([], tmp_path / "stop") == 0
+    assert attempts == 10
+
+
+def test_windows_route_drift_requests_reconnect(monkeypatch) -> None:
+    client, _ = make_client()
+    network = WindowsClientNetwork("pyvpn0", ["127.0.0.1"], "10.8.0.1", "1.1.1.1")
+    client.network = network
+    monkeypatch.setattr(client_module, "WINDOWS_ROUTE_CHECK_INTERVAL", 0)
+
+    def route_changed() -> None:
+        raise PlatformError("server bypass route changed")
+
+    monkeypatch.setattr(network, "verify", route_changed)
+    with pytest.raises(TunnelUnavailableError, match="Windows route or DNS changed"):
+        asyncio.run(client.windows_route_health_loop())
+
+
+def test_client_forwards_wintun_batch_in_order() -> None:
+    client, transport = make_client()
+
+    def ipv4_packet(source: str, marker: int) -> bytes:
+        header = bytearray(20)
+        header[0] = 0x45
+        header[2:4] = (21).to_bytes(2, "big")
+        header[8] = 64
+        header[9] = 6
+        header[12:16] = ipaddress.IPv4Address(source).packed
+        header[16:20] = ipaddress.IPv4Address("1.1.1.1").packed
+        return bytes(header) + bytes([marker])
+
+    class FakeBatchTun:
+        calls = 0
+
+        async def read_batch(self) -> list[bytes]:
+            self.calls += 1
+            if self.calls == 1:
+                return [
+                    ipv4_packet("10.8.0.2", 1),
+                    ipv4_packet("10.8.0.3", 2),
+                    ipv4_packet("10.8.0.2", 3),
+                ]
+            await asyncio.Future()
+
+    tun = FakeBatchTun()
+    client.tun = tun
+
+    async def scenario() -> None:
+        task = asyncio.create_task(client.tun_to_udp_loop())
+        await asyncio.sleep(0.01)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+    assert tun.calls == 2
+    assert len(transport.sent) == 2
+    plaintexts = [
+        open_packet(data, client.session.c2s_cipher)[1]
+        for data, _ in transport.sent
+    ]
+    assert [plaintext[-1] for plaintext in plaintexts] == [1, 3]
+    assert all(
+        open_packet(data, client.session.c2s_cipher)[0].packet_type == PACKET_TYPE_DATA
+        for data, _ in transport.sent
+    )
 
 
 def test_windows_worker_does_not_retry_authentication_failure(

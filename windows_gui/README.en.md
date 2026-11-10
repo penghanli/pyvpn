@@ -14,7 +14,8 @@ target computer does not need Python or an internet connection.
    bandwidth measurement.
 
 Connected means an authenticated UDP response was received from the server.
-The app retries after a network change; Connect can be cancelled while pending.
+The app keeps retrying after network loss or a Windows route/DNS change; a pending
+connection can be cancelled.
 
 Profiles, the client ID, and logs normally stay in `pyvpn-data` beside the executable. When
 the executable is placed in the root of an installed Windows offline package,
@@ -28,6 +29,10 @@ in the server list, but they are stored in plaintext in the local
 to restrict a newly created data directory to Windows Administrators and
 SYSTEM. Every connection validates the configured certificate fingerprint.
 Keep `pyvpn-data` when replacing the EXE to retain profiles and the client ID.
+
+Test all checks only the TCP control port, not the UDP data path. If an
+application reports `ECONNRESET`, also check whether that application has its
+own HTTP/HTTPS proxy configured.
 
 ## Build
 

@@ -25,6 +25,8 @@ powershell -ExecutionPolicy Bypass -File .\install-client.ps1
 
 客户端会等待服务端的加密 UDP 回包；若连接失败，请确认本机可向服务端发送
 UDP `8444`。TCP `8443` 能连通只代表控制连接成功。
+Windows 路由或 DNS 在连接期间变化时，客户端会退出并清理旧路由；再次运行
+连接命令即可重新建立。图形版会自动持续重连。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\pyvpn-client\pyvpn-client-up.ps1"

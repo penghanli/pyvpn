@@ -57,7 +57,7 @@ ACCENT = "#087f73"
 ACCENT_DARK = "#05665d"
 DANGER = "#b42318"
 WARNING = "#9a6700"
-RECONNECT_DELAYS = (1, 2, 4, 8)
+RECONNECT_DELAYS = (1, 2, 4, 8, 15, 30)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -166,7 +166,8 @@ def _run_client_with_retries(client_args: list[str], stop_file: Path) -> int:
             pass
         return True
 
-    for attempt in range(len(RECONNECT_DELAYS) + 1):
+    attempt = 0
+    while True:
         if stop_requested():
             return 0
         try:
@@ -175,17 +176,14 @@ def _run_client_with_retries(client_args: list[str], stop_file: Path) -> int:
         except (TunnelUnavailableError, TimeoutError, ConnectionError, OSError) as exc:
             if stop_requested():
                 return 0
-            if attempt == len(RECONNECT_DELAYS):
-                print(f"connection recovery failed: {exc}", file=sys.stderr, flush=True)
-                return 1
-            delay = RECONNECT_DELAYS[attempt]
+            delay = RECONNECT_DELAYS[min(attempt, len(RECONNECT_DELAYS) - 1)]
+            attempt += 1
             print(f"connection interrupted: {exc}; retrying in {delay}s", file=sys.stderr, flush=True)
             deadline = time.monotonic() + delay
             while time.monotonic() < deadline:
                 if stop_requested():
                     return 0
                 time.sleep(min(0.2, max(0, deadline - time.monotonic())))
-    return 1
 
 
 def _set_dpi_awareness() -> None:

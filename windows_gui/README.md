@@ -11,7 +11,7 @@
 3. 选择节点后点击“切换到此节点”，再点击“连接”。
 4. “全部测速”测试各节点 TCP 控制端口的连接延迟；该数值不是下载带宽。
 
-“已连接”表示已收到服务端加密 UDP 回包。网络切换后程序会尝试重连；
+“已连接”表示已收到服务端加密 UDP 回包。网络中断或 Windows 路由/DNS 变化后程序会持续尝试重连；
 “连接中”时可点击“取消连接”。
 
 节点、客户端 ID 和日志默认保存在 EXE 同目录的 `pyvpn-data`。如果 EXE 放在已安装的
@@ -38,6 +38,8 @@ Resolve-DnsName www.microsoft.com
 
 同时查看 EXE 旁 `pyvpn-data\client.err.log`；如果复用了离线客户端配置，
 日志位于 `pyvpn-client\config\client.err.log`。请勿发送 `servers.json` 或 Token。
+“测速”只测试节点的 TCP 控制端口，不能判断 UDP 数据通道是否畅通。
+若某个应用提示 `ECONNRESET`，还应检查该应用是否单独设置了 HTTP/HTTPS 代理。
 
 ## 构建
 
@@ -52,7 +54,7 @@ python windows_gui\build.py
 
 - `pyvpn.exe`
 - `pyvpn.exe.sha256`
-- `pyvpn-windows-x64-0.1.0-r2.zip`
+- `pyvpn-windows-x64-0.1.0-r3.zip`
 
 构建脚本固定并校验 Wintun 0.14.1 官方压缩包，使用 PyInstaller
 `--onefile --windowed --uac-admin`。当前构建没有 Authenticode 商业代码签名；
