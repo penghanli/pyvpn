@@ -327,7 +327,7 @@ PROFILES_PATH=$PROFILES_PATH_Q
 STOP_FILE=$STOP_FILE_Q
 DNS_STATE=$DNS_STATE_Q
 rm -f "\$STOP_FILE"
-ARGS=(--profiles "\$PROFILES_PATH" --stop-file "\$STOP_FILE" --dns-state-file "\$DNS_STATE")
+ARGS=(--reconnect --profiles "\$PROFILES_PATH" --stop-file "\$STOP_FILE" --dns-state-file "\$DNS_STATE")
 if [[ -n "\${SSH_CLIENT:-}" ]]; then ARGS+=(--bypass-ip "\${SSH_CLIENT%% *}"); fi
 exec "\$RUNTIME_EXE" "\${ARGS[@]}"
 EOF

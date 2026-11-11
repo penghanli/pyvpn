@@ -13,6 +13,7 @@
 
 “已连接”表示已收到服务端加密 UDP 回包。网络中断或 Windows 路由/DNS 变化后程序会持续尝试重连；
 “连接中”时可点击“取消连接”。
+本版将 UDP 数据按顺序批量写入虚拟网卡，并在 Wintun 写入持续失败时重连。
 
 节点、客户端 ID 和日志默认保存在 EXE 同目录的 `pyvpn-data`。如果 EXE 放在已安装的
 Windows 离线包根目录，程序会优先复用
@@ -54,7 +55,7 @@ python windows_gui\build.py
 
 - `pyvpn.exe`
 - `pyvpn.exe.sha256`
-- `pyvpn-windows-x64-0.1.0-r3.zip`
+- `pyvpn-windows-x64-0.1.0-r4.zip`
 
 构建脚本固定并校验 Wintun 0.14.1 官方压缩包，使用 PyInstaller
 `--onefile --windowed --uac-admin`。当前构建没有 Authenticode 商业代码签名；

@@ -24,13 +24,13 @@ def _load_build_module():
 def test_expected_package_matrix_and_names() -> None:
     build = _load_build_module()
     expected = {
-        "pyvpn-offline-client-windows-x64-0.1.0-r8.zip",
-        "pyvpn-offline-client-linux-x86_64-0.1.0-r8.tar.gz",
-        "pyvpn-offline-server-linux-x86_64-0.1.0-r8.tar.gz",
-        "pyvpn-offline-client-linux-arm64-0.1.0-r8.tar.gz",
-        "pyvpn-offline-server-linux-arm64-0.1.0-r8.tar.gz",
-        "pyvpn-offline-client-macos-x86_64-0.1.0-r8.tar.gz",
-        "pyvpn-offline-client-macos-arm64-0.1.0-r8.tar.gz",
+        "pyvpn-offline-client-windows-x64-0.1.0-r9.zip",
+        "pyvpn-offline-client-linux-x86_64-0.1.0-r9.tar.gz",
+        "pyvpn-offline-server-linux-x86_64-0.1.0-r9.tar.gz",
+        "pyvpn-offline-client-linux-arm64-0.1.0-r9.tar.gz",
+        "pyvpn-offline-server-linux-arm64-0.1.0-r9.tar.gz",
+        "pyvpn-offline-client-macos-x86_64-0.1.0-r9.tar.gz",
+        "pyvpn-offline-client-macos-arm64-0.1.0-r9.tar.gz",
     }
     actual = {
         build._archive_name(target_platform, arch, role)
@@ -165,7 +165,7 @@ def test_generated_client_launchers_avoid_fragile_shell_constructs() -> None:
 
     for installer in (linux, macos):
         assert 'TOKEN="$(trim_outer_whitespace "$TOKEN")"' in installer
-        assert r'ARGS=(--profiles "\$PROFILES_PATH" --stop-file "\$STOP_FILE"' in installer
+        assert r'ARGS=(--reconnect --profiles "\$PROFILES_PATH" --stop-file "\$STOP_FILE"' in installer
         assert 'for bypass_ip in "${BYPASS_IPS[@]-}"' in installer
         assert 'for bypass_ip in "${BYPASS_IPS[@]}"' not in installer
         assert r'[[ -f "\$ERR_FILE" ]] && tail' not in installer
@@ -278,7 +278,7 @@ def test_assemble_all_platform_package(tmp_path: Path) -> None:
 
     all_archive = build.assemble_all(input_dir, output_dir)
 
-    assert all_archive.name == "pyvpn-offline-all-0.1.0-r8.zip"
+    assert all_archive.name == "pyvpn-offline-all-0.1.0-r9.zip"
     assert (output_dir / "SHA256SUMS").is_file()
     assert len(list(output_dir.iterdir())) == 9
     build.verify_archive(all_archive)

@@ -377,6 +377,7 @@ if (Test-Path -LiteralPath `$clientIdPath) {
   Set-Content -Encoding ASCII -LiteralPath `$clientIdPath -Value `$clientId
 }
 `$clientArgs = @(
+  "--reconnect",
   "--profiles",
   $(Quote-PowerShellString $profilesPath),
   "--client-id",

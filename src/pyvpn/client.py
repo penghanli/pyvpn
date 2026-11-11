@@ -10,6 +10,7 @@ import signal
 import socket
 import ssl
 import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +20,7 @@ from .constants import CONTROL_VERSION, DEFAULT_MTU, PACKET_TYPE_DATA, PACKET_TY
 from .crypto import SessionKeys, TunnelCipher
 from .errors import AuthenticationError, PlatformError, ProtocolError, TunnelUnavailableError
 from .framing import read_frame, write_frame
+from .ingress import OrderedTunWriter
 from .ip import inspect_ipv4
 from .packet import open_packet, parse_header, seal_packet
 from .profiles import ProfileError, selected_profile
@@ -37,6 +39,7 @@ UDP_PROBE_INTERVAL = 1.0
 UDP_KEEPALIVE_INTERVAL = 10.0
 UDP_STALE_TIMEOUT = 40.0
 WINDOWS_ROUTE_CHECK_INTERVAL = 60.0
+CLI_RECONNECT_DELAYS = (1, 2, 4, 8, 15, 30)
 
 
 @dataclass
@@ -79,7 +82,7 @@ class ClientUdpProtocol(asyncio.DatagramProtocol):
         self.client = client
 
     def datagram_received(self, data: bytes, addr) -> None:
-        asyncio.create_task(self.client.handle_udp_datagram(data, addr))
+        self.client.handle_udp_datagram(data, addr)
 
     def error_received(self, exc: Exception) -> None:
         print(f"UDP error: {exc}")
@@ -89,6 +92,7 @@ class VpnClient:
     def __init__(self, config: ClientConfig):
         self.config = config
         self.tun: TunDevice | None = None
+        self.tun_writer: OrderedTunWriter | None = None
         self.network: LinuxClientNetwork | MacClientNetwork | WindowsClientNetwork | None = None
         self.udp_transport: asyncio.DatagramTransport | None = None
         self.session: ClientSession | None = None
@@ -171,6 +175,7 @@ class VpnClient:
                 raise TunnelUnavailableError(f"Windows network setup failed: {exc}") from exc
             print("client routes and DNS configured", flush=True)
 
+            self.tun_writer = OrderedTunWriter(self.tun, "client")
             self.udp_transport, _ = await create_udp_endpoint(
                 lambda: ClientUdpProtocol(self), ("0.0.0.0", 0)
             )
@@ -181,6 +186,7 @@ class VpnClient:
 
             tasks = [
                 asyncio.create_task(self.tun_to_udp_loop()),
+                asyncio.create_task(self.tun_writer.run()),
                 asyncio.create_task(self.control_heartbeat_loop(reader, writer)),
                 asyncio.create_task(self.udp_keepalive_loop()),
                 asyncio.create_task(self.stop_file_loop()),
@@ -191,6 +197,7 @@ class VpnClient:
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
             for task in done:
                 if task.exception() is not None:
                     task.result()
@@ -349,7 +356,7 @@ class VpnClient:
             except PlatformError as exc:
                 raise TunnelUnavailableError(f"Windows route or DNS changed: {exc}") from exc
 
-    async def handle_udp_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
+    def handle_udp_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         session = self.session
         if session is None or self.tun is None:
             return
@@ -367,7 +374,8 @@ class VpnClient:
             info = inspect_ipv4(plaintext)
             if str(info.destination) != session.client_vip:
                 return
-            await self.tun.write(plaintext[: info.total_length])
+            if self.tun_writer is not None:
+                self.tun_writer.offer(plaintext[: info.total_length])
         except ProtocolError:
             return
 
@@ -446,6 +454,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mtu", type=int)
     parser.add_argument("--no-dns", action="store_true")
     parser.add_argument(
+        "--reconnect",
+        action="store_true",
+        help="Keep retrying after transient tunnel or network failures.",
+    )
+    parser.add_argument(
         "--bypass-ip",
         action="append",
         default=[],
@@ -519,10 +532,45 @@ def main() -> None:
 
         profiles_main(sys.argv[2:])
         return
+    argv = sys.argv[1:]
+    args = build_parser().parse_args(argv)
     try:
-        asyncio.run(async_main())
+        if not args.reconnect:
+            asyncio.run(async_main())
+            return
+        if not any(value == "--client-id" or value.startswith("--client-id=") for value in argv):
+            argv = [*argv, "--client-id", args.client_id]
+        stop_path = Path(args.stop_file) if args.stop_file else None
+        attempt = 0
+        while True:
+            if _consume_stop_file(stop_path):
+                return
+            try:
+                asyncio.run(async_main(argv))
+                return
+            except (TunnelUnavailableError, TimeoutError, ConnectionError, OSError) as exc:
+                if _consume_stop_file(stop_path):
+                    return
+                delay = CLI_RECONNECT_DELAYS[min(attempt, len(CLI_RECONNECT_DELAYS) - 1)]
+                attempt += 1
+                print(f"connection interrupted: {exc}; retrying in {delay}s", file=sys.stderr)
+                deadline = time.monotonic() + delay
+                while time.monotonic() < deadline:
+                    if _consume_stop_file(stop_path):
+                        return
+                    time.sleep(min(0.2, max(0, deadline - time.monotonic())))
     except AuthenticationError as exc:
         raise SystemExit(str(exc)) from None
+
+
+def _consume_stop_file(path: Path | None) -> bool:
+    if path is None or not path.is_file():
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    return True
 
 
 if __name__ == "__main__":

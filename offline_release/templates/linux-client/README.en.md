@@ -29,6 +29,9 @@ sudo ./pyvpn-client/pyvpn-client-down
 sudo ./pyvpn-client/pyvpn-client-status
 ```
 
+The client reconnects after transient network failures. Disconnect stops
+background retries.
+
 Add a server; token input is hidden when `--token` is omitted:
 
 ```bash

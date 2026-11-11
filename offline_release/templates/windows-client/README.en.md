@@ -29,9 +29,9 @@ value as well.
 
 The client waits for an authenticated UDP response from the server. A working
 TCP 8443 control connection alone does not confirm that UDP 8444 is reachable.
-If Windows routes or DNS change during a connection, the client exits and
-cleans up its routes. Run the connect command again; the desktop app retries
-automatically.
+If Windows routes, DNS, or the tunnel fail transiently, the client cleans up
+and reconnects automatically. Disconnect stops background retries. Incorrect
+tokens or certificate fingerprints still require manual correction.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\pyvpn-client\pyvpn-client-up.ps1"

@@ -27,6 +27,7 @@ from .constants import (
 from .crypto import SessionKeys, TunnelCipher, new_session_keys
 from .errors import ProtocolError
 from .framing import read_frame, write_frame
+from .ingress import OrderedTunWriter
 from .ip import inspect_ipv4
 from .nat import LinuxNatManager
 from .packet import open_packet, parse_header, seal_packet
@@ -87,7 +88,7 @@ class ServerUdpProtocol(asyncio.DatagramProtocol):
         self.server = server
 
     def datagram_received(self, data: bytes, addr) -> None:
-        asyncio.create_task(self.server.handle_udp_datagram(data, addr))
+        self.server.handle_udp_datagram(data, addr)
 
     def error_received(self, exc: Exception) -> None:
         print(f"UDP error: {exc}")
@@ -97,6 +98,7 @@ class VpnServer:
     def __init__(self, config: ServerConfig):
         self.config = config
         self.tun: LinuxTunDevice | None = None
+        self.tun_writer: OrderedTunWriter | None = None
         self.nat: LinuxNatManager | None = None
         self.udp_transport: asyncio.DatagramTransport | None = None
         self.sessions_by_id: dict[int, ActiveSession] = {}
@@ -113,6 +115,7 @@ class VpnServer:
         require_linux_root()
         self.tun = LinuxTunDevice.create(self.config.tun_name, self.config.mtu)
         self.tun.configure_server(self.config.server_vip, 24)
+        self.tun_writer = OrderedTunWriter(self.tun, "server")
 
         self.nat = LinuxNatManager(self.config.subnet, self.config.external_interface)
         self.nat.enable()
@@ -138,15 +141,17 @@ class VpnServer:
 
         stop_task = asyncio.create_task(self._stop.wait())
         tun_task = asyncio.create_task(self.tun_to_udp_loop())
+        write_task = asyncio.create_task(self.tun_writer.run())
         timeout_task = asyncio.create_task(self.session_timeout_loop())
         try:
             async with control_server:
                 done, pending = await asyncio.wait(
-                    [stop_task, tun_task, timeout_task],
+                    [stop_task, tun_task, write_task, timeout_task],
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 for task in pending:
                     task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
                 for task in done:
                     if task is not stop_task:
                         task.result()
@@ -155,6 +160,7 @@ class VpnServer:
             await control_server.wait_closed()
             stop_task.cancel()
             tun_task.cancel()
+            write_task.cancel()
             timeout_task.cancel()
             await self.cleanup()
 
@@ -293,7 +299,7 @@ class VpnServer:
         if self.sessions_by_vip.get(session.client_vip) is session:
             self.sessions_by_vip.pop(session.client_vip, None)
 
-    async def handle_udp_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
+    def handle_udp_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         try:
             header = parse_header(data)
             session = self.sessions_by_id.get(header.session_id)
@@ -321,8 +327,8 @@ class VpnServer:
             info = inspect_ipv4(plaintext)
             if info.source != session.client_vip:
                 return
-            if self.tun is not None:
-                await self.tun.write(plaintext[: info.total_length])
+            if self.tun_writer is not None:
+                self.tun_writer.offer(plaintext[: info.total_length])
         except ProtocolError:
             return
 

@@ -30,6 +30,8 @@ sudo ./pyvpn-client/pyvpn-client-down
 sudo ./pyvpn-client/pyvpn-client-status
 ```
 
+连接后的暂时性网络故障会自动重连；执行断开命令会停止后台重试。
+
 添加节点、列出延迟、选择节点和立即切换：
 
 ```bash

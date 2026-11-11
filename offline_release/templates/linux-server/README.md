@@ -25,6 +25,16 @@ sudo ufw allow 8443/tcp
 sudo ufw allow 8444/udp
 ```
 
+如果 UFW 已启用且默认拦截转发，还需在安装后允许 VPN 子网经默认网卡出站
+（以下为默认 `pyvpn0` 和 `10.8.0.0/24`，自定义配置需相应替换）：
+
+```bash
+WAN_IF=$(ip -4 route show default | awk '/default/ {for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')
+sudo ufw route allow in on pyvpn0 out on "$WAN_IF" from 10.8.0.0/24
+```
+
+不要为安装 pyvpn 而执行 `ufw enable` 或 `ufw reset`，以免影响现有 SSH 规则。
+
 云服务器还要在云厂商安全组中开放同样的两个端口。
 
 ## 安装
@@ -45,7 +55,7 @@ sudo ./install-server.sh --public-host <server-ip-or-domain> --max-clients 5
 ```
 
 升级已有 pyvpn 时，默认保留 `/etc/pyvpn/server.env`、共享 Token、服务器
-证书和私钥。
+证书和私钥；客户端无需重新输入这些值。升级会重启服务，现有连接短暂中断。
 
 ## 管理
 

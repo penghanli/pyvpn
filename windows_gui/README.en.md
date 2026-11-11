@@ -16,6 +16,8 @@ target computer does not need Python or an internet connection.
 Connected means an authenticated UDP response was received from the server.
 The app keeps retrying after network loss or a Windows route/DNS change; a pending
 connection can be cancelled.
+This version writes decrypted UDP data to Wintun in order and in batches, and
+reconnects when Wintun writes remain blocked.
 
 Profiles, the client ID, and logs normally stay in `pyvpn-data` beside the executable. When
 the executable is placed in the root of an installed Windows offline package,

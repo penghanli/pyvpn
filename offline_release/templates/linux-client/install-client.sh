@@ -312,7 +312,7 @@ RUNTIME_EXE=$RUNTIME_EXE_Q
 PROFILES_PATH=$PROFILES_PATH_Q
 STOP_FILE=$STOP_FILE_Q
 rm -f "\$STOP_FILE"
-ARGS=(--profiles "\$PROFILES_PATH" --stop-file "\$STOP_FILE")
+ARGS=(--reconnect --profiles "\$PROFILES_PATH" --stop-file "\$STOP_FILE")
 add_bypass_ip() {
   local ip="\$1"
   if [[ -n "\$ip" ]]; then ARGS+=(--bypass-ip "\$ip"); fi

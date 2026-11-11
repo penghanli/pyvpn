@@ -25,6 +25,8 @@ sudo ./pyvpn-client/pyvpn-client-down
 sudo ./pyvpn-client/pyvpn-client-status
 ```
 
+连接后的暂时性网络故障会自动重连；执行断开命令会停止后台重试。
+
 添加节点；省略 `--token` 时会隐藏输入：
 
 ```bash

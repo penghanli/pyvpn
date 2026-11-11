@@ -32,6 +32,9 @@ sudo ./pyvpn-client/pyvpn-client-down
 sudo ./pyvpn-client/pyvpn-client-status
 ```
 
+The client reconnects after transient network failures. Disconnect stops
+background retries.
+
 Add a server, list latency, select a server, or switch immediately:
 
 ```bash

@@ -66,11 +66,11 @@ def test_client_waits_for_authenticated_udp_response() -> None:
 
         wrong_key = TunnelCipher(new_session_keys().s2c)
         invalid = seal_packet(PACKET_TYPE_KEEPALIVE, 7, 1, b"", wrong_key)
-        await client.handle_udp_datagram(invalid, client.server_udp_addr)
+        client.handle_udp_datagram(invalid, client.server_udp_addr)
         assert not probe.done()
 
         reply = seal_packet(PACKET_TYPE_KEEPALIVE, 7, 1, b"", client.session.s2c_cipher)
-        await client.handle_udp_datagram(reply, client.server_udp_addr)
+        client.handle_udp_datagram(reply, client.server_udp_addr)
         await probe
         assert client._last_udp_received is not None
 
@@ -229,3 +229,55 @@ def test_windows_client_id_is_stable_across_restarts(tmp_path: Path) -> None:
     second = windows_gui._persistent_client_id(path)
     assert first == second
     assert path.read_text(encoding="ascii").strip() == first
+
+
+def test_cli_reconnect_keeps_one_client_id(monkeypatch) -> None:
+    attempts: list[str] = []
+
+    async def flaky_client(argv: list[str]) -> None:
+        attempts.append(client_module.build_parser().parse_args(argv).client_id)
+        if len(attempts) < 3:
+            raise TunnelUnavailableError("temporary UDP loss")
+
+    monkeypatch.setattr(client_module, "async_main", flaky_client)
+    monkeypatch.setattr(client_module, "CLI_RECONNECT_DELAYS", (0,))
+    monkeypatch.setattr(client_module.sys, "argv", ["pyvpn-client", "--reconnect"])
+    client_module.main()
+    assert len(attempts) == 3
+    assert len(set(attempts)) == 1
+
+
+def test_cli_reconnect_honors_stop_during_recovery(monkeypatch, tmp_path: Path) -> None:
+    stop_file = tmp_path / "client.stop"
+    attempts = 0
+
+    async def interrupted_client(_argv: list[str]) -> None:
+        nonlocal attempts
+        attempts += 1
+        stop_file.write_text("stop\n", encoding="ascii")
+        raise TunnelUnavailableError("temporary UDP loss")
+
+    monkeypatch.setattr(client_module, "async_main", interrupted_client)
+    monkeypatch.setattr(
+        client_module.sys,
+        "argv",
+        ["pyvpn-client", "--reconnect", "--stop-file", str(stop_file)],
+    )
+    client_module.main()
+    assert attempts == 1
+    assert not stop_file.exists()
+
+
+def test_cli_without_reconnect_keeps_one_shot_behavior(monkeypatch) -> None:
+    attempts = 0
+
+    async def failing_client() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise TunnelUnavailableError("temporary UDP loss")
+
+    monkeypatch.setattr(client_module, "async_main", failing_client)
+    monkeypatch.setattr(client_module.sys, "argv", ["pyvpn-client"])
+    with pytest.raises(TunnelUnavailableError, match="temporary UDP loss"):
+        client_module.main()
+    assert attempts == 1

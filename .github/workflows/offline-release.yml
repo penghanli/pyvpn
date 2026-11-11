@@ -259,6 +259,7 @@ jobs:
             $actualArguments = @(Get-Content -LiteralPath $argumentsFile)
             $clientId = (Get-Content -Raw (Join-Path $configDir "client.id")).Trim()
             $expectedArguments = @(
+            "--reconnect",
               "--profiles", $profilesPath,
               "--client-id", $clientId,
               "--stop-file", (Join-Path $configDir "client.stop"),

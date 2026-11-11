@@ -16,6 +16,14 @@ sudo ufw allow 8444/udp
 sudo ufw reload
 ```
 
+If UFW is active with a restrictive forwarding policy, allow the VPN subnet
+to leave through the server's default interface after installation:
+
+```bash
+WAN_IF=$(ip -4 route show default | awk '/default/ {for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')
+sudo ufw route allow in on pyvpn0 out on "$WAN_IF" from 10.8.0.0/24
+```
+
 ```bash
 # firewalld
 sudo firewall-cmd --permanent --add-port=8443/tcp
@@ -39,7 +47,7 @@ The installer:
 - creates and starts `pyvpn-server.service`.
 
 The server keeps running after SSH disconnects because it is managed by systemd.
-The shared token allows 3 simultaneous clients by default. Set a different
+The shared token allows 5 simultaneous clients by default. Set a different
 limit from 1 to 10 with `--max-clients`, for example:
 
 ```bash

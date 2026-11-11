@@ -94,7 +94,7 @@ def test_server_echoes_existing_encrypted_udp_keepalive() -> None:
         transport = Transport()
         server.udp_transport = transport
         probe = seal_packet(PACKET_TYPE_KEEPALIVE, 7, 1, b"", session.c2s_cipher)
-        await server.handle_udp_datagram(probe, ("192.0.2.10", 50000))
+        server.handle_udp_datagram(probe, ("192.0.2.10", 50000))
 
         assert session.last_udp_seen is not None
         assert transport.sent is not None

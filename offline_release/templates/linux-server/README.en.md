@@ -25,6 +25,17 @@ sudo ufw allow 8443/tcp
 sudo ufw allow 8444/udp
 ```
 
+If UFW is active and blocks forwarding, also allow the VPN subnet to leave
+through the default interface after installation. Replace the interface and
+subnet if your configuration differs from the defaults:
+
+```bash
+WAN_IF=$(ip -4 route show default | awk '/default/ {for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')
+sudo ufw route allow in on pyvpn0 out on "$WAN_IF" from 10.8.0.0/24
+```
+
+Do not run `ufw enable` or `ufw reset` just for pyvpn; that can disrupt SSH.
+
 Cloud servers must also allow the same two ports in the provider security
 group.
 
@@ -47,7 +58,7 @@ sudo ./install-server.sh --public-host <server-ip-or-domain> --max-clients 5
 ```
 
 Upgrades retain `/etc/pyvpn/server.env`, the shared token, certificate, and
-private key.
+private key. Existing connections are briefly interrupted during the restart.
 
 ## Management
 
