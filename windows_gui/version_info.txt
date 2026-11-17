@@ -16,12 +16,12 @@ VSVersionInfo(
         [
           StringStruct(u'CompanyName', u'pyvpn'),
           StringStruct(u'FileDescription', u'pyvpn Windows Client'),
-          StringStruct(u'FileVersion', u'0.1.0-r4'),
+          StringStruct(u'FileVersion', u'0.1.0-r5'),
           StringStruct(u'InternalName', u'pyvpn'),
           StringStruct(u'LegalCopyright', u'Copyright pyvpn contributors'),
           StringStruct(u'OriginalFilename', u'pyvpn.exe'),
           StringStruct(u'ProductName', u'pyvpn'),
-          StringStruct(u'ProductVersion', u'0.1.0-r4')
+          StringStruct(u'ProductVersion', u'0.1.0-r5')
         ]
       )
     ]),

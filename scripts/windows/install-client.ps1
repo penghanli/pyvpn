@@ -182,6 +182,7 @@ $startScript = Join-Path $InstallDir "pyvpn-client-start.ps1"
 . $(Quote-PowerShellString $envPath)
 `$env:PYVPN_TOKEN = `$PyVpnToken
 `$argsList = @(
+  "--reconnect",
   "--server-host", `$PyVpnServerHost,
   "--control-port", [string]`$PyVpnControlPort,
   "--cert-fingerprint", `$PyVpnCertFingerprint,

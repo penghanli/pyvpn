@@ -8,7 +8,9 @@ import pytest
 
 from pyvpn import tun
 from pyvpn import routes
+from pyvpn import system
 from pyvpn.client import ClientConfig, VpnClient
+from pyvpn.errors import PlatformError
 from pyvpn.windows_app import (
     WINDOWS_APP_VERSION,
     native_windows_architecture,
@@ -110,10 +112,37 @@ def test_windows_build_requests_single_file_uac_executable() -> None:
     assert '"--add-binary"' in source
 
 
+def test_powershell_failure_does_not_repeat_the_full_script(monkeypatch) -> None:
+    script = "$privateValue = 'not-for-logs'; throw 'route unavailable'"
+
+    def failed_run(args, *, check, timeout):
+        assert check is False
+        assert timeout == 30
+        return subprocess.CompletedProcess(args, 1, "", "Find-NetRoute: System Error 1232")
+
+    monkeypatch.setattr(system, "run", failed_run)
+    with pytest.raises(PlatformError, match="System Error 1232") as error:
+        system.run_powershell(script)
+    assert "not-for-logs" not in str(error.value)
+
+
+def test_powershell_timeout_is_bounded_and_retryable(monkeypatch) -> None:
+    def timed_out(args, *, check, timeout):
+        raise subprocess.TimeoutExpired(args, timeout)
+
+    monkeypatch.setattr(system, "run", timed_out)
+    with pytest.raises(PlatformError, match="timed out after 10s"):
+        system.run_powershell("Find-NetRoute", timeout=10)
+    result = system.run_powershell("Remove-NetRoute", check=False, timeout=20)
+    assert result.returncode == 124
+
+
 @pytest.mark.skipif(os.name != "nt", reason="requires Windows PowerShell")
 def test_windows_route_setup_script_parses(monkeypatch) -> None:
     scripts: list[str] = []
-    monkeypatch.setattr(routes, "run_powershell", lambda script: scripts.append(script))
+    monkeypatch.setattr(
+        routes, "run_powershell", lambda script, **_kwargs: scripts.append(script)
+    )
     network = routes.WindowsClientNetwork(
         tun_name="pyvpn0",
         server_ips=["203.0.113.10"],
@@ -124,7 +153,12 @@ def test_windows_route_setup_script_parses(monkeypatch) -> None:
     network.verify()
 
     assert len(scripts) == 2
-    assert "Find-NetRoute -RemoteIPAddress $ip" in scripts[0]
+    assert all(
+        "Get-NetIPInterface -AddressFamily IPv4 -ConnectionState Connected" in script
+        for script in scripts
+    )
+    assert all("$interfaceMetrics[[int]$_.InterfaceIndex]" in script for script in scripts)
+    assert "Find-NetRoute -RemoteIPAddress $ip" not in scripts[0]
     assert "Find-NetRoute -RemoteIPAddress $ip" in scripts[1]
     assert "Server bypass route to $ip changed" in scripts[1]
     assert "Get-DnsClientServerAddress" in scripts[1]

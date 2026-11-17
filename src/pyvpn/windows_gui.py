@@ -21,7 +21,7 @@ from tkinter import font, messagebox, ttk
 
 from .auth import normalize_fingerprint
 from .client import async_main as client_async_main
-from .errors import TunnelUnavailableError
+from .errors import PlatformError, TunnelUnavailableError
 from .profiles import (
     ProfileError,
     ServerProfile,
@@ -173,7 +173,14 @@ def _run_client_with_retries(client_args: list[str], stop_file: Path) -> int:
         try:
             asyncio.run(client_async_main(client_args))
             return 0
-        except (TunnelUnavailableError, TimeoutError, ConnectionError, OSError) as exc:
+        except (
+            TunnelUnavailableError,
+            PlatformError,
+            TimeoutError,
+            ConnectionError,
+            OSError,
+            EOFError,
+        ) as exc:
             if stop_requested():
                 return 0
             delay = RECONNECT_DELAYS[min(attempt, len(RECONNECT_DELAYS) - 1)]
@@ -886,7 +893,9 @@ class PyVpnWindowsApp:
             self.status_label.configure(text=label, foreground=ACCENT)
             self.connect_button.configure(text="断开", state="normal")
         elif state == "connecting":
-            label = f"正在连接 {server}..." if server else "正在连接..."
+            retrying = "connection interrupted:" in tail_text(self.paths.error_log, max_bytes=1024)
+            verb = "正在重连" if retrying else "正在连接"
+            label = f"{verb} {server}..." if server else f"{verb}..."
             self.status_label.configure(text=label, foreground=WARNING)
             self.connect_button.configure(text="取消连接", state="normal")
         elif state == "disconnecting":
@@ -904,9 +913,12 @@ class PyVpnWindowsApp:
         self.failure_reported_for = pid
         error_text = tail_text(self.paths.error_log)
         log_text = tail_text(self.paths.log)
-        detail = error_text or log_text or "连接进程已退出，请检查服务器地址、Token 和证书指纹。"
-        if len(detail) > 3500:
-            detail = detail[-3500:]
+        detail = error_text or log_text
+        detail = (
+            detail.strip().splitlines()[-1]
+            if detail.strip()
+            else "连接进程已退出，请检查服务器地址、Token 和证书指纹。"
+        )
         messagebox.showerror("VPN 连接失败", detail, parent=self.root)
 
     def _show_about(self) -> None:

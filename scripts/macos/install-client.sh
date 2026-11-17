@@ -228,6 +228,7 @@ mkdir -p "\$RUN_DIR"
 rm -f "\$STOP_FILE"
 
 ARGS=(
+  --reconnect
   --server-host "\$PYVPN_SERVER_HOST"
   --control-port "\$PYVPN_CONTROL_PORT"
   --cert-fingerprint "\$PYVPN_CERT_FINGERPRINT"

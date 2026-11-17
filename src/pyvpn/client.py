@@ -38,7 +38,8 @@ UDP_PROBE_TIMEOUT = 8.0
 UDP_PROBE_INTERVAL = 1.0
 UDP_KEEPALIVE_INTERVAL = 10.0
 UDP_STALE_TIMEOUT = 40.0
-WINDOWS_ROUTE_CHECK_INTERVAL = 60.0
+WINDOWS_ROUTE_CHECK_INTERVAL = 10.0
+WINDOWS_ROUTE_FAILURE_LIMIT = 2
 CLI_RECONNECT_DELAYS = (1, 2, 4, 8, 15, 30)
 
 
@@ -137,6 +138,8 @@ class VpnClient:
                         "authentication failed: server rejected the shared token "
                         f"(client token_id={token_identifier(self.config.token)})"
                     )
+                elif message.startswith("server is full:"):
+                    raise TunnelUnavailableError(message)
                 raise AuthenticationError(message)
             self.session = self._parse_accept(accept)
             print(
@@ -148,7 +151,12 @@ class VpnClient:
             )
 
             self.tun = create_tun(self.config.tun_name, self.config.mtu)
-            self.tun.configure_client(self.session.client_vip, self.session.server_vip)
+            try:
+                self.tun.configure_client(self.session.client_vip, self.session.server_vip)
+            except PlatformError as exc:
+                raise TunnelUnavailableError(
+                    f"{current_platform} tunnel setup failed: {exc}"
+                ) from exc
             print(f"TUN interface ready: {self.tun.name}", flush=True)
 
             if current_platform == "Linux":
@@ -170,9 +178,9 @@ class VpnClient:
             try:
                 self.network.setup()
             except PlatformError as exc:
-                if current_platform != "Windows":
-                    raise
-                raise TunnelUnavailableError(f"Windows network setup failed: {exc}") from exc
+                raise TunnelUnavailableError(
+                    f"{current_platform} network setup failed: {exc}"
+                ) from exc
             print("client routes and DNS configured", flush=True)
 
             self.tun_writer = OrderedTunWriter(self.tun, "client")
@@ -210,7 +218,7 @@ class VpnClient:
             writer.close()
             try:
                 await asyncio.wait_for(writer.wait_closed(), timeout=5)
-            except (ConnectionError, OSError, ssl.SSLError, TimeoutError):
+            except (ConnectionError, OSError, ssl.SSLError, TimeoutError, EOFError):
                 pass
             try:
                 await self.cleanup()
@@ -349,12 +357,18 @@ class VpnClient:
     async def windows_route_health_loop(self) -> None:
         if not isinstance(self.network, WindowsClientNetwork):
             return
+        failures = 0
         while True:
-            await asyncio.sleep(WINDOWS_ROUTE_CHECK_INTERVAL)
             try:
                 await asyncio.to_thread(self.network.verify)
             except PlatformError as exc:
-                raise TunnelUnavailableError(f"Windows route or DNS changed: {exc}") from exc
+                failures += 1
+                if failures >= WINDOWS_ROUTE_FAILURE_LIMIT:
+                    raise TunnelUnavailableError(f"Windows route or DNS changed: {exc}") from exc
+                print(f"Windows route check failed; checking again: {exc}", flush=True)
+            else:
+                failures = 0
+            await asyncio.sleep(WINDOWS_ROUTE_CHECK_INTERVAL)
 
     def handle_udp_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         session = self.session
@@ -548,7 +562,9 @@ def main() -> None:
             try:
                 asyncio.run(async_main(argv))
                 return
-            except (TunnelUnavailableError, TimeoutError, ConnectionError, OSError) as exc:
+            except (
+                TunnelUnavailableError, TimeoutError, ConnectionError, OSError, EOFError
+            ) as exc:
                 if _consume_stop_file(stop_path):
                     return
                 delay = CLI_RECONNECT_DELAYS[min(attempt, len(CLI_RECONNECT_DELAYS) - 1)]

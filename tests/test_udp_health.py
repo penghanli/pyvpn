@@ -98,6 +98,53 @@ def test_client_detects_udp_stall_after_connection() -> None:
         client._check_udp_health(10.0 + client_module.UDP_STALE_TIMEOUT + 1)
 
 
+@pytest.mark.parametrize(
+    ("message", "expected_error"),
+    [
+        ("server is full: 5 clients are already active", TunnelUnavailableError),
+        ("authentication failed", AuthenticationError),
+    ],
+)
+def test_client_retries_capacity_but_not_bad_token(
+    monkeypatch, message: str, expected_error: type[Exception]
+) -> None:
+    client, _ = make_client()
+    client.tun = None
+    client.session = None
+    client.udp_transport = None
+
+    class FakeWriter:
+        def close(self) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            pass
+
+    async def fake_open(_address: str):
+        return object(), FakeWriter()
+
+    async def fake_hello(_writer) -> None:
+        pass
+
+    async def fake_read(_reader):
+        return {"type": "error", "message": message}
+
+    async def fake_write(_writer, _message) -> None:
+        pass
+
+    monkeypatch.setattr(client_module.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(client_module, "require_linux_root", lambda: None)
+    monkeypatch.setattr(client_module, "resolve_ipv4", lambda _host: "127.0.0.1")
+    monkeypatch.setattr(client, "_install_signal_handlers", lambda: None)
+    monkeypatch.setattr(client, "_open_control", fake_open)
+    monkeypatch.setattr(client, "_send_hello", fake_hello)
+    monkeypatch.setattr(client_module, "read_frame", fake_read)
+    monkeypatch.setattr(client_module, "write_frame", fake_write)
+
+    with pytest.raises(expected_error):
+        asyncio.run(client.run())
+
+
 def test_windows_worker_retries_transient_failure(monkeypatch, tmp_path: Path) -> None:
     windows_gui = pytest.importorskip("pyvpn.windows_gui")
     attempts = 0
@@ -130,6 +177,31 @@ def test_windows_worker_keeps_retrying_until_network_recovers(monkeypatch, tmp_p
     assert attempts == 10
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        asyncio.IncompleteReadError(b"", 4),
+        PlatformError("Find-NetRoute: System Error 1232"),
+    ],
+)
+def test_windows_worker_retries_route_and_control_failures(
+    monkeypatch, tmp_path: Path, failure: Exception
+) -> None:
+    windows_gui = pytest.importorskip("pyvpn.windows_gui")
+    attempts = 0
+
+    async def flaky_client(_args: list[str]) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise failure
+
+    monkeypatch.setattr(windows_gui, "client_async_main", flaky_client)
+    monkeypatch.setattr(windows_gui, "RECONNECT_DELAYS", (0,))
+    assert windows_gui._run_client_with_retries([], tmp_path / "stop") == 0
+    assert attempts == 2
+
+
 def test_windows_route_drift_requests_reconnect(monkeypatch) -> None:
     client, _ = make_client()
     network = WindowsClientNetwork("pyvpn0", ["127.0.0.1"], "10.8.0.1", "1.1.1.1")
@@ -142,6 +214,25 @@ def test_windows_route_drift_requests_reconnect(monkeypatch) -> None:
     monkeypatch.setattr(network, "verify", route_changed)
     with pytest.raises(TunnelUnavailableError, match="Windows route or DNS changed"):
         asyncio.run(client.windows_route_health_loop())
+
+
+def test_windows_route_health_tolerates_one_failed_check(monkeypatch) -> None:
+    client, _ = make_client()
+    network = WindowsClientNetwork("pyvpn0", ["127.0.0.1"], "10.8.0.1", "1.1.1.1")
+    client.network = network
+    monkeypatch.setattr(client_module, "WINDOWS_ROUTE_CHECK_INTERVAL", 0)
+    checks = 0
+
+    def intermittent_check() -> None:
+        nonlocal checks
+        checks += 1
+        if checks in (1, 3, 4):
+            raise PlatformError("Find-NetRoute: System Error 1232")
+
+    monkeypatch.setattr(network, "verify", intermittent_check)
+    with pytest.raises(TunnelUnavailableError, match="Windows route or DNS changed"):
+        asyncio.run(client.windows_route_health_loop())
+    assert checks == 4
 
 
 def test_client_forwards_wintun_batch_in_order() -> None:
@@ -268,6 +359,22 @@ def test_cli_reconnect_honors_stop_during_recovery(monkeypatch, tmp_path: Path) 
     assert not stop_file.exists()
 
 
+def test_cli_reconnect_retries_control_eof(monkeypatch) -> None:
+    attempts = 0
+
+    async def disconnected(_argv: list[str]) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise asyncio.IncompleteReadError(b"", 4)
+
+    monkeypatch.setattr(client_module, "async_main", disconnected)
+    monkeypatch.setattr(client_module, "CLI_RECONNECT_DELAYS", (0,))
+    monkeypatch.setattr(client_module.sys, "argv", ["pyvpn-client", "--reconnect"])
+    client_module.main()
+    assert attempts == 2
+
+
 def test_cli_without_reconnect_keeps_one_shot_behavior(monkeypatch) -> None:
     attempts = 0
 
@@ -281,3 +388,14 @@ def test_cli_without_reconnect_keeps_one_shot_behavior(monkeypatch) -> None:
     with pytest.raises(TunnelUnavailableError, match="temporary UDP loss"):
         client_module.main()
     assert attempts == 1
+
+
+def test_online_client_launchers_enable_reconnect() -> None:
+    root = Path(__file__).resolve().parents[1] / "scripts"
+    windows = (root / "windows" / "install-client.ps1").read_text(encoding="utf-8")
+    linux = (root / "linux" / "install-client.sh").read_text(encoding="utf-8")
+    macos = (root / "macos" / "install-client.sh").read_text(encoding="utf-8")
+
+    assert '`$argsList = @(\n  "--reconnect",' in windows
+    assert 'ARGS=(\n  --reconnect' in linux
+    assert 'ARGS=(\n  --reconnect' in macos

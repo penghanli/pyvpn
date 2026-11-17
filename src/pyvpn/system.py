@@ -48,6 +48,7 @@ def run(
     *,
     check: bool = True,
     input_text: str | None = None,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         list(args),
@@ -56,6 +57,7 @@ def run(
         input=input_text,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        timeout=timeout,
     )
     if check and result.returncode != 0:
         command = " ".join(shlex.quote(str(arg)) for arg in args)
@@ -65,15 +67,25 @@ def run(
     return result
 
 
-def run_powershell(script: str, *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return run(
-        [
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script,
-        ],
-        check=check,
-    )
+def run_powershell(
+    script: str, *, check: bool = True, timeout: float = 30.0
+) -> subprocess.CompletedProcess[str]:
+    command = [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        script,
+    ]
+    try:
+        result = run(command, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        result = subprocess.CompletedProcess(
+            command, 124, "", f"PowerShell command timed out after {timeout:g}s"
+        )
+    if check and result.returncode != 0:
+        output = (result.stderr or result.stdout or "").strip()
+        detail = f": {output[-1200:]}" if output else ""
+        raise PlatformError(f"PowerShell command failed ({result.returncode}){detail}")
+    return result

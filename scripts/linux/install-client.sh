@@ -174,6 +174,7 @@ cat > /usr/local/bin/pyvpn-client-start <<EOF
 set -euo pipefail
 source "$CONFIG_DIR/client.env"
 ARGS=(
+  --reconnect
   --server-host "\$PYVPN_SERVER_HOST"
   --control-port "\$PYVPN_CONTROL_PORT"
   --cert-fingerprint "\$PYVPN_CERT_FINGERPRINT"

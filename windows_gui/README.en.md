@@ -14,7 +14,8 @@ target computer does not need Python or an internet connection.
    bandwidth measurement.
 
 Connected means an authenticated UDP response was received from the server.
-The app keeps retrying after network loss or a Windows route/DNS change; a pending
+The app keeps retrying after network loss or a Windows route/DNS change, shows
+"Reconnecting" while it retries, and tolerates a brief failed route check. A pending
 connection can be cancelled.
 This version writes decrypted UDP data to Wintun in order and in batches, and
 reconnects when Wintun writes remain blocked.

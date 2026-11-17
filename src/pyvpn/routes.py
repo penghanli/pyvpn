@@ -45,6 +45,22 @@ def _ps_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _windows_physical_default_script() -> str:
+    return """
+$interfaceMetrics = @{}
+Get-NetIPInterface -AddressFamily IPv4 -ConnectionState Connected -ErrorAction Stop |
+  ForEach-Object { $interfaceMetrics[[int]$_.InterfaceIndex] = [int]$_.InterfaceMetric }
+$default = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' `
+  -PolicyStore ActiveStore -ErrorAction Stop |
+  Where-Object { $_.InterfaceIndex -ne $tun.ifIndex -and
+    $interfaceMetrics.ContainsKey([int]$_.InterfaceIndex) } |
+  Sort-Object @{ Expression = { [int]$_.RouteMetric +
+    $interfaceMetrics[[int]$_.InterfaceIndex] } } |
+  Select-Object -First 1
+if (-not $default) { throw 'Could not find a connected physical IPv4 default route' }
+"""
+
+
 def _mac_default_route() -> RouteInfo:
     return _mac_route_get("default")
 
@@ -426,11 +442,7 @@ $tunName = {_ps_quote(self.tun_name)}
 $gateway = {_ps_quote(self.gateway)}
 $serverIps = {server_ips_ps}
 $tun = Get-NetAdapter -Name $tunName -ErrorAction Stop
-$default = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' |
-  Where-Object {{ $_.InterfaceIndex -ne $tun.ifIndex }} |
-  Sort-Object @{{ Expression = {{ $_.RouteMetric + $_.InterfaceMetric }} }} |
-  Select-Object -First 1
-if (-not $default) {{ throw 'Could not find the current IPv4 default route' }}
+{_windows_physical_default_script()}
 
 foreach ($ip in $serverIps) {{
   Get-NetRoute -AddressFamily IPv4 -DestinationPrefix "$ip/32" -ErrorAction SilentlyContinue |
@@ -448,7 +460,6 @@ foreach ($prefix in @('0.0.0.0/1', '128.0.0.0/1')) {{
 }}
 
 {dns_script}
-{self._verification_checks_script()}
 """
         run_powershell(script)
 
@@ -460,14 +471,10 @@ $ErrorActionPreference = 'Stop'
 $tunName = {_ps_quote(self.tun_name)}
 $serverIps = {server_ips_ps}
 $tun = Get-NetAdapter -Name $tunName -ErrorAction Stop
-$default = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' |
-  Where-Object {{ $_.InterfaceIndex -ne $tun.ifIndex }} |
-  Sort-Object @{{ Expression = {{ $_.RouteMetric + $_.InterfaceMetric }} }} |
-  Select-Object -First 1
-if (-not $default) {{ throw 'Physical IPv4 default route is missing' }}
+{_windows_physical_default_script()}
 {self._verification_checks_script()}
 """
-        run_powershell(script)
+        run_powershell(script, timeout=10)
 
     def _verification_checks_script(self) -> str:
         dns_check = ""
@@ -522,4 +529,4 @@ foreach ($ip in $serverIps) {{
     Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
 }}
 """
-        run_powershell(script, check=False)
+        run_powershell(script, check=False, timeout=20)
