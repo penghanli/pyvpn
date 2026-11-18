@@ -560,8 +560,22 @@ jobs:
           for helper in pyvpn-server-restart pyvpn-server-status pyvpn-server-logs; do
             bash -n "/usr/local/bin/$helper"
           done
-          grep -Fx 'PYVPN_MAX_CLIENTS=5' "$SERVER_CONFIG/server.env"
+          grep -Fx 'PYVPN_MAX_CLIENTS=10' "$SERVER_CONFIG/server.env"
           grep -F -- '--max-clients ${PYVPN_MAX_CLIENTS}' /etc/systemd/system/pyvpn-server.service
+          TOKEN_BEFORE="$(sed -n 's/^PYVPN_TOKEN=//p' "$SERVER_CONFIG/server.env")"
+          FINGERPRINT_BEFORE="$(cat "$SERVER_CONFIG/server.fingerprint")"
+          sed -i 's/^PYVPN_MAX_CLIENTS=10$/PYVPN_MAX_CLIENTS=5/' "$SERVER_CONFIG/server.env"
+          "$SERVER_ROOT/install-server.sh" \
+            --install-dir "$SERVER_INSTALL" \
+            --config-dir "$SERVER_CONFIG"
+          grep -Fx 'PYVPN_MAX_CLIENTS=5' "$SERVER_CONFIG/server.env"
+          "$SERVER_ROOT/install-server.sh" \
+            --max-clients 10 \
+            --install-dir "$SERVER_INSTALL" \
+            --config-dir "$SERVER_CONFIG"
+          grep -Fx 'PYVPN_MAX_CLIENTS=10' "$SERVER_CONFIG/server.env"
+          [[ "$(sed -n 's/^PYVPN_TOKEN=//p' "$SERVER_CONFIG/server.env")" == "$TOKEN_BEFORE" ]]
+          [[ "$(cat "$SERVER_CONFIG/server.fingerprint")" == "$FINGERPRINT_BEFORE" ]]
       - name: Confirm existing online files are untouched
         run: |
           find README.md src scripts -type f \

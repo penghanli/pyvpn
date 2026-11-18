@@ -54,11 +54,13 @@ finishes.
 For unattended installation:
 
 ```bash
-sudo ./install-server.sh --public-host <server-ip-or-domain> --max-clients 5
+sudo ./install-server.sh --public-host <server-ip-or-domain> --max-clients 10
 ```
 
-Upgrades retain `/etc/pyvpn/server.env`, the shared token, certificate, and
-private key. Existing connections are briefly interrupted during the restart.
+Upgrades retain `/etc/pyvpn/server.env`, the shared token, certificate, private
+key, and existing client limit. Pass `--max-clients 10` explicitly to raise an
+older installation's limit to ten. Existing connections are briefly interrupted
+during the restart.
 
 ## Management
 

@@ -24,13 +24,13 @@ def _load_build_module():
 def test_expected_package_matrix_and_names() -> None:
     build = _load_build_module()
     expected = {
-        "pyvpn-offline-client-windows-x64-0.1.0-r10.zip",
-        "pyvpn-offline-client-linux-x86_64-0.1.0-r10.tar.gz",
-        "pyvpn-offline-server-linux-x86_64-0.1.0-r10.tar.gz",
-        "pyvpn-offline-client-linux-arm64-0.1.0-r10.tar.gz",
-        "pyvpn-offline-server-linux-arm64-0.1.0-r10.tar.gz",
-        "pyvpn-offline-client-macos-x86_64-0.1.0-r10.tar.gz",
-        "pyvpn-offline-client-macos-arm64-0.1.0-r10.tar.gz",
+        "pyvpn-offline-client-windows-x64-0.1.0-r11.zip",
+        "pyvpn-offline-client-linux-x86_64-0.1.0-r11.tar.gz",
+        "pyvpn-offline-server-linux-x86_64-0.1.0-r11.tar.gz",
+        "pyvpn-offline-client-linux-arm64-0.1.0-r11.tar.gz",
+        "pyvpn-offline-server-linux-arm64-0.1.0-r11.tar.gz",
+        "pyvpn-offline-client-macos-x86_64-0.1.0-r11.tar.gz",
+        "pyvpn-offline-client-macos-arm64-0.1.0-r11.tar.gz",
     }
     actual = {
         build._archive_name(target_platform, arch, role)
@@ -223,15 +223,15 @@ def test_installers_validate_supported_architectures() -> None:
     assert '[[ "$ACTUAL_ARCH" != "$PACKAGE_ARCH" ]]' in macos
 
 
-def test_fresh_server_default_is_five_clients() -> None:
+def test_fresh_server_default_is_ten_clients() -> None:
     online = (REPO_ROOT / "scripts" / "linux" / "install-server.sh").read_text(
         encoding="utf-8"
     )
     offline = (
         OFFLINE_ROOT / "templates" / "linux-server" / "install-server.sh"
     ).read_text(encoding="utf-8")
-    assert 'MAX_CLIENTS="5"' in online
-    assert 'MAX_CLIENTS="5"' in offline
+    assert 'MAX_CLIENTS="10"' in online
+    assert 'MAX_CLIENTS="10"' in offline
 
 
 def test_manifest_detects_tampering(tmp_path: Path) -> None:
@@ -278,7 +278,7 @@ def test_assemble_all_platform_package(tmp_path: Path) -> None:
 
     all_archive = build.assemble_all(input_dir, output_dir)
 
-    assert all_archive.name == "pyvpn-offline-all-0.1.0-r10.zip"
+    assert all_archive.name == "pyvpn-offline-all-0.1.0-r11.zip"
     assert (output_dir / "SHA256SUMS").is_file()
     assert len(list(output_dir.iterdir())) == 9
     build.verify_archive(all_archive)

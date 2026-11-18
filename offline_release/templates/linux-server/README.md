@@ -51,11 +51,12 @@ sudo ./install-server.sh
 无人值守安装：
 
 ```bash
-sudo ./install-server.sh --public-host <server-ip-or-domain> --max-clients 5
+sudo ./install-server.sh --public-host <server-ip-or-domain> --max-clients 10
 ```
 
 升级已有 pyvpn 时，默认保留 `/etc/pyvpn/server.env`、共享 Token、服务器
-证书和私钥；客户端无需重新输入这些值。升级会重启服务，现有连接短暂中断。
+证书和私钥，也会保留旧的最大连接数；若要改为 10，请明确添加
+`--max-clients 10`。客户端无需重新输入这些值。升级会重启服务，现有连接短暂中断。
 
 ## 管理
 

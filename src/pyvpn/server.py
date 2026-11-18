@@ -36,7 +36,7 @@ from .system import require_linux_root
 from .tun import LinuxTunDevice
 from .udp import create_udp_endpoint
 
-DEFAULT_MAX_CLIENTS = 5
+DEFAULT_MAX_CLIENTS = 10
 MIN_MAX_CLIENTS = 1
 MAX_MAX_CLIENTS = 10
 

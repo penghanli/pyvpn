@@ -47,13 +47,22 @@ The installer:
 - creates and starts `pyvpn-server.service`.
 
 The server keeps running after SSH disconnects because it is managed by systemd.
-The shared token allows 5 simultaneous clients by default. Set a different
-limit from 1 to 10 with `--max-clients`, for example:
+The shared token allows 10 simultaneous clients by default on a fresh install.
+Set a lower limit from 1 to 10 with `--max-clients`, for example:
 
 ```bash
 sudo scripts/linux/install-server.sh \
   --public-host <vps-public-ip-or-domain> \
-  --max-clients 5
+  --max-clients 8
+```
+
+Changing the default does not rewrite an existing `/etc/pyvpn/server.env`.
+To raise an installed server's limit without changing its token or certificate:
+
+```bash
+sudo sed -i 's/^PYVPN_MAX_CLIENTS=.*/PYVPN_MAX_CLIENTS=10/' /etc/pyvpn/server.env
+sudo systemctl restart pyvpn-server.service
+grep '^PYVPN_MAX_CLIENTS=' /etc/pyvpn/server.env
 ```
 
 Useful commands:
