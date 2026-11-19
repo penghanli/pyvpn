@@ -7,11 +7,13 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Mapping
 
 
-WINDOWS_APP_VERSION = "0.1.0-r5"
+WINDOWS_APP_VERSION = "0.1.0-r6"
+LOG_MAX_BYTES = 5 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -135,12 +137,26 @@ def remove_pid_if_current(path: Path, pid: int) -> None:
         pass
 
 
-def tail_text(path: Path, *, max_bytes: int = 16_384) -> str:
+def begin_log_session(
+    path: Path, server_id: str, *, max_bytes: int = LOG_MAX_BYTES
+) -> int:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_file() and path.stat().st_size >= max_bytes:
+        path.replace(path.with_name(path.name + ".1"))
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    with path.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write(f"\n[{timestamp}] session started: {server_id}\n")
+    return path.stat().st_size
+
+
+def tail_text(
+    path: Path, *, max_bytes: int = 16_384, start_offset: int = 0
+) -> str:
     try:
         with path.open("rb") as stream:
             stream.seek(0, os.SEEK_END)
             size = stream.tell()
-            stream.seek(max(0, size - max_bytes))
+            stream.seek(max(0, start_offset, size - max_bytes))
             payload = stream.read()
     except OSError:
         return ""

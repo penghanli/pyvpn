@@ -27,6 +27,11 @@ Windows 离线包根目录，程序会优先复用
 连接始终校验节点配置中的证书指纹。重装或更新 EXE 时保留 `pyvpn-data`，
 即可沿用节点和客户端 ID。
 
+点击“查看日志”可打开数据目录。`client.log` 记录连接尝试，
+`client.err.log` 记录重连原因和错误；日志按会话追加，达到 5 MiB 后在下次连接时
+轮转为 `.1` 备份。排查故障时保留日志并记录出现问题的时间，转发前检查其中的
+服务器地址和本机网络信息，勿转发 `servers.json` 或 Token。
+
 ## 连接故障
 
 如果显示“已连接”但网页打不开，在管理员 PowerShell 中检查：
@@ -55,7 +60,7 @@ python windows_gui\build.py
 
 - `pyvpn.exe`
 - `pyvpn.exe.sha256`
-- `pyvpn-windows-x64-0.1.0-r5.zip`
+- `pyvpn-windows-x64-0.1.0-r6.zip`
 
 构建脚本固定并校验 Wintun 0.14.1 官方压缩包，使用 PyInstaller
 `--onefile --windowed --uac-admin`。当前构建没有 Authenticode 商业代码签名；

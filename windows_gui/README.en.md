@@ -33,6 +33,12 @@ to restrict a newly created data directory to Windows Administrators and
 SYSTEM. Every connection validates the configured certificate fingerprint.
 Keep `pyvpn-data` when replacing the EXE to retain profiles and the client ID.
 
+Use View logs to open the data directory. `client.log` records connection attempts;
+`client.err.log` records retry reasons and failures. Logs append across sessions and
+rotate to a `.1` backup on the next connection after reaching 5 MiB. Note the time
+of a failure and review logs for server addresses or local network details before
+sharing them. Never share `servers.json` or a token.
+
 Test all checks only the TCP control port, not the UDP data path. If an
 application reports `ECONNRESET`, also check whether that application has its
 own HTTP/HTTPS proxy configured.

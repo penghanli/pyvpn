@@ -58,6 +58,7 @@ def run(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=timeout,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
     )
     if check and result.returncode != 0:
         command = " ".join(shlex.quote(str(arg)) for arg in args)

@@ -14,6 +14,7 @@ import time
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 
 import tkinter as tk
@@ -34,6 +35,7 @@ from .profiles import (
 from .windows_app import (
     WINDOWS_APP_VERSION,
     WindowsAppPaths,
+    begin_log_session,
     bundled_resource,
     configure_bundled_wintun,
     is_windows_admin,
@@ -170,6 +172,8 @@ def _run_client_with_retries(client_args: list[str], stop_file: Path) -> int:
     while True:
         if stop_requested():
             return 0
+        timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+        print(f"[{timestamp}] connection attempt {attempt + 1}", flush=True)
         try:
             asyncio.run(client_async_main(client_args))
             return 0
@@ -185,7 +189,12 @@ def _run_client_with_retries(client_args: list[str], stop_file: Path) -> int:
                 return 0
             delay = RECONNECT_DELAYS[min(attempt, len(RECONNECT_DELAYS) - 1)]
             attempt += 1
-            print(f"connection interrupted: {exc}; retrying in {delay}s", file=sys.stderr, flush=True)
+            timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+            print(
+                f"[{timestamp}] connection interrupted: {exc}; retrying in {delay}s",
+                file=sys.stderr,
+                flush=True,
+            )
             deadline = time.monotonic() + delay
             while time.monotonic() < deadline:
                 if stop_requested():
@@ -356,6 +365,8 @@ class PyVpnWindowsApp:
         self.close_after_stop = False
         self.last_running = False
         self.failure_reported_for: int | None = None
+        self.log_start_offset = 0
+        self.error_log_start_offset = 0
 
         self.root.title(f"{APP_TITLE} - Windows 客户端")
         self.root.geometry("880x590")
@@ -450,6 +461,9 @@ class PyVpnWindowsApp:
         self.switch_button.pack(side="left", padx=(8, 0))
         self.speed_button = ttk.Button(toolbar, text="测速", command=self.test_all_latency)
         self.speed_button.pack(side="right")
+        ttk.Button(toolbar, text="查看日志", command=self._open_logs).pack(
+            side="right", padx=(0, 8)
+        )
 
         table_frame = ttk.Frame(outer, style="Surface.TFrame", padding=1)
         table_frame.grid(row=2, column=0, sticky="nsew")
@@ -816,8 +830,8 @@ class PyVpnWindowsApp:
             except OSError:
                 pass
         try:
-            self.paths.log.write_text("", encoding="utf-8")
-            self.paths.error_log.write_text("", encoding="utf-8")
+            self.log_start_offset = begin_log_session(self.paths.log, server_id)
+            self.error_log_start_offset = begin_log_session(self.paths.error_log, server_id)
             self.child = subprocess.Popen(
                 self._worker_command(server_id),
                 cwd=self.paths.executable_dir,
@@ -893,7 +907,11 @@ class PyVpnWindowsApp:
             self.status_label.configure(text=label, foreground=ACCENT)
             self.connect_button.configure(text="断开", state="normal")
         elif state == "connecting":
-            retrying = "connection interrupted:" in tail_text(self.paths.error_log, max_bytes=1024)
+            retrying = "connection interrupted:" in tail_text(
+                self.paths.error_log,
+                max_bytes=1024,
+                start_offset=self.error_log_start_offset,
+            )
             verb = "正在重连" if retrying else "正在连接"
             label = f"{verb} {server}..." if server else f"{verb}..."
             self.status_label.configure(text=label, foreground=WARNING)
@@ -911,8 +929,8 @@ class PyVpnWindowsApp:
         if pid is not None and self.failure_reported_for == pid:
             return
         self.failure_reported_for = pid
-        error_text = tail_text(self.paths.error_log)
-        log_text = tail_text(self.paths.log)
+        error_text = tail_text(self.paths.error_log, start_offset=self.error_log_start_offset)
+        log_text = tail_text(self.paths.log, start_offset=self.log_start_offset)
         detail = error_text or log_text
         detail = (
             detail.strip().splitlines()[-1]
@@ -920,6 +938,13 @@ class PyVpnWindowsApp:
             else "连接进程已退出，请检查服务器地址、Token 和证书指纹。"
         )
         messagebox.showerror("VPN 连接失败", detail, parent=self.root)
+
+    def _open_logs(self) -> None:
+        try:
+            self.paths.data_dir.mkdir(parents=True, exist_ok=True)
+            os.startfile(self.paths.data_dir)
+        except OSError as exc:
+            messagebox.showerror("无法打开日志", str(exc), parent=self.root)
 
     def _show_about(self) -> None:
         dialog = tk.Toplevel(self.root)

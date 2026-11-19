@@ -13,8 +13,10 @@ from pyvpn.client import ClientConfig, VpnClient
 from pyvpn.errors import PlatformError
 from pyvpn.windows_app import (
     WINDOWS_APP_VERSION,
+    begin_log_session,
     native_windows_architecture,
     resolve_app_paths,
+    tail_text,
 )
 
 
@@ -135,6 +137,48 @@ def test_powershell_timeout_is_bounded_and_retryable(monkeypatch) -> None:
         system.run_powershell("Find-NetRoute", timeout=10)
     result = system.run_powershell("Remove-NetRoute", check=False, timeout=20)
     assert result.returncode == 124
+
+
+def test_system_commands_do_not_open_a_windows_console(monkeypatch) -> None:
+    observed = {}
+
+    def fake_run(args, **kwargs):
+        observed.update(kwargs)
+        return subprocess.CompletedProcess(args, 0, "ok\n", "")
+
+    monkeypatch.setattr(system.subprocess, "run", fake_run)
+    result = system.run(["powershell.exe", "-Command", "Write-Output ok"])
+
+    expected = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    assert observed["creationflags"] == expected
+    assert result.stdout == "ok\n"
+
+
+def test_gui_logs_keep_prior_sessions_without_stale_errors(tmp_path: Path) -> None:
+    log = tmp_path / "client.err.log"
+    first_offset = begin_log_session(log, "first")
+    with log.open("a", encoding="utf-8") as stream:
+        stream.write("connection interrupted: old error\n")
+
+    second_offset = begin_log_session(log, "second")
+    assert second_offset > first_offset
+    assert tail_text(log, start_offset=second_offset) == ""
+    assert "old error" in log.read_text(encoding="utf-8")
+
+    with log.open("a", encoding="utf-8") as stream:
+        stream.write("connection interrupted: new error\n")
+    assert tail_text(log, start_offset=second_offset) == "connection interrupted: new error"
+
+
+def test_gui_logs_rotate_when_size_limit_is_reached(tmp_path: Path) -> None:
+    log = tmp_path / "client.log"
+    log.write_text("previous output", encoding="utf-8")
+
+    offset = begin_log_session(log, "sg", max_bytes=10)
+
+    assert (tmp_path / "client.log.1").read_text(encoding="utf-8") == "previous output"
+    assert "session started: sg" in log.read_text(encoding="utf-8")
+    assert tail_text(log, start_offset=offset) == ""
 
 
 @pytest.mark.skipif(os.name != "nt", reason="requires Windows PowerShell")
