@@ -114,6 +114,25 @@ def test_windows_build_requests_single_file_uac_executable() -> None:
     assert '"--add-binary"' in source
 
 
+def test_closing_gui_cancels_pending_node_switch(monkeypatch) -> None:
+    from pyvpn import windows_gui
+
+    app = windows_gui.PyVpnWindowsApp.__new__(windows_gui.PyVpnWindowsApp)
+    app.root = object()
+    app.pending_reconnect = True
+    app.close_after_stop = False
+    requested: list[bool] = []
+    app._running_pid = lambda: 1234
+    app._request_disconnect = lambda: requested.append(True)
+    monkeypatch.setattr(windows_gui.messagebox, "askyesno", lambda *_args, **_kwargs: True)
+
+    app._on_close()
+
+    assert app.pending_reconnect is False
+    assert app.close_after_stop is True
+    assert requested == [True]
+
+
 def test_powershell_failure_does_not_repeat_the_full_script(monkeypatch) -> None:
     script = "$privateValue = 'not-for-logs'; throw 'route unavailable'"
 
@@ -195,8 +214,9 @@ def test_windows_route_setup_script_parses(monkeypatch) -> None:
     )
     network.setup()
     network.verify()
+    network.repair()
 
-    assert len(scripts) == 2
+    assert len(scripts) == 3
     assert all(
         "Get-NetIPInterface -AddressFamily IPv4 -ConnectionState Connected" in script
         for script in scripts
@@ -206,6 +226,8 @@ def test_windows_route_setup_script_parses(monkeypatch) -> None:
     assert "Find-NetRoute -RemoteIPAddress $ip" in scripts[1]
     assert "Server bypass route to $ip changed" in scripts[1]
     assert "Get-DnsClientServerAddress" in scripts[1]
+    assert "Set-DnsClientServerAddress" in scripts[2]
+    assert "-InterfaceIndex $tun.ifIndex -PolicyStore ActiveStore" in scripts[2]
     parser = (
         "$tokens=$null;$errors=$null;"
         "[System.Management.Automation.Language.Parser]::ParseInput("

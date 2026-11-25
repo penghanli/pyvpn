@@ -7,7 +7,6 @@ import asyncio
 import os
 import platform
 import signal
-import socket
 import ssl
 import sys
 import time
@@ -57,6 +56,8 @@ class ClientConfig:
     stop_file: str | None
     dns_state_file: str | None = None
     ready_file: str | None = None
+    server_ip_override: str | None = None
+    guard_data_dir: str | None = None
 
 
 @dataclass
@@ -120,7 +121,7 @@ class VpnClient:
             f"connecting to {self.config.server_host}:{self.config.control_port}",
             flush=True,
         )
-        server_ip = resolve_ipv4(self.config.server_host)
+        server_ip = self.config.server_ip_override or resolve_ipv4(self.config.server_host)
         print(f"resolved server IPv4: {server_ip}", flush=True)
         try:
             reader, writer = await asyncio.wait_for(
@@ -142,6 +143,13 @@ class VpnClient:
                     raise TunnelUnavailableError(message)
                 raise AuthenticationError(message)
             self.session = self._parse_accept(accept)
+            if current_platform == "Windows" and self.config.guard_data_dir:
+                from .windows_guard import WindowsPublicGuard
+
+                await asyncio.to_thread(
+                    WindowsPublicGuard(Path(self.config.guard_data_dir)).enable,
+                    [server_ip, self.session.udp_host],
+                )
             print(
                 "control session accepted: "
                 f"client_vip={self.session.client_vip} "
@@ -324,12 +332,17 @@ class VpnClient:
             udp_host = self.config.server_host
         keys = SessionKeys.from_json(crypto)
         client_vip = str(message["client_vip"]).split("/", 1)[0]
+        udp_ip = (
+            self.config.server_ip_override
+            if udp_host == self.config.server_host and self.config.server_ip_override
+            else resolve_ipv4(udp_host)
+        )
         return ClientSession(
             session_id=int(message["session_id"]),
             client_vip=client_vip,
             server_vip=str(message["server_vip"]),
             dns=str(dns_values[0]),
-            udp_host=socket.gethostbyname(udp_host),
+            udp_host=udp_ip,
             udp_port=int(endpoint["port"]),
             keys=keys,
             c2s_cipher=TunnelCipher(keys.c2s),
@@ -364,8 +377,18 @@ class VpnClient:
             except PlatformError as exc:
                 failures += 1
                 if failures >= WINDOWS_ROUTE_FAILURE_LIMIT:
-                    raise TunnelUnavailableError(f"Windows route or DNS changed: {exc}") from exc
-                print(f"Windows route check failed; checking again: {exc}", flush=True)
+                    try:
+                        await asyncio.to_thread(self.network.repair)
+                        await asyncio.to_thread(self.network.verify)
+                    except PlatformError as repair_exc:
+                        raise TunnelUnavailableError(
+                            f"Windows route or DNS changed: {repair_exc}"
+                        ) from repair_exc
+                    print("Windows route and DNS repaired after network change", flush=True)
+                    self._send_udp(PACKET_TYPE_KEEPALIVE, b"")
+                    failures = 0
+                else:
+                    print(f"Windows route check failed; checking again: {exc}", flush=True)
             else:
                 failures = 0
             await asyncio.sleep(WINDOWS_ROUTE_CHECK_INTERVAL)
@@ -491,6 +514,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--ready-file",
         help="Write this file after the VPN routes and DNS are ready, then remove it on exit.",
     )
+    parser.add_argument("--server-ip-override", help=argparse.SUPPRESS)
+    parser.add_argument("--guard-data-dir", help=argparse.SUPPRESS)
     return parser
 
 
@@ -536,6 +561,8 @@ async def async_main(argv: list[str] | None = None) -> None:
         stop_file=args.stop_file,
         dns_state_file=args.dns_state_file,
         ready_file=args.ready_file,
+        server_ip_override=args.server_ip_override,
+        guard_data_dir=args.guard_data_dir,
     )
     await VpnClient(config).run()
 

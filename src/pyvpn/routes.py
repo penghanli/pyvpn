@@ -476,6 +476,51 @@ $tun = Get-NetAdapter -Name $tunName -ErrorAction Stop
 """
         run_powershell(script, timeout=10)
 
+    def repair(self) -> None:
+        unique_server_ips = list(dict.fromkeys(self.server_ips))
+        server_ips_ps = "@(" + ",".join(_ps_quote(ip) for ip in unique_server_ips) + ")"
+        dns_repair = ""
+        if self.manage_dns:
+            dns_repair = f"""
+$dnsServers = @(Get-DnsClientServerAddress -InterfaceIndex $tun.ifIndex `
+  -AddressFamily IPv4 -ErrorAction Stop).ServerAddresses
+if ($dnsServers -notcontains {_ps_quote(self.dns)}) {{
+  Set-DnsClientServerAddress -InterfaceAlias $tunName `
+    -ServerAddresses @({_ps_quote(self.dns)}) -ErrorAction Stop
+}}
+"""
+        script = f"""
+$ErrorActionPreference = 'Stop'
+$tunName = {_ps_quote(self.tun_name)}
+$gateway = {_ps_quote(self.gateway)}
+$serverIps = {server_ips_ps}
+$tun = Get-NetAdapter -Name $tunName -ErrorAction Stop
+{_windows_physical_default_script()}
+foreach ($ip in $serverIps) {{
+  $routes = @(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix "$ip/32" `
+    -PolicyStore ActiveStore -ErrorAction SilentlyContinue)
+  if ($routes.Count -ne 1 -or $routes[0].InterfaceIndex -ne $default.InterfaceIndex -or
+      $routes[0].NextHop -ne $default.NextHop) {{
+    $routes | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+    New-NetRoute -DestinationPrefix "$ip/32" -InterfaceIndex $default.InterfaceIndex `
+      -NextHop $default.NextHop -RouteMetric 1 -PolicyStore ActiveStore `
+      -ErrorAction Stop | Out-Null
+  }}
+}}
+foreach ($prefix in @('0.0.0.0/1', '128.0.0.0/1')) {{
+  $routes = @(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix $prefix `
+    -InterfaceIndex $tun.ifIndex -PolicyStore ActiveStore -ErrorAction SilentlyContinue)
+  if ($routes.Count -ne 1 -or $routes[0].NextHop -ne $gateway) {{
+    $routes | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+    New-NetRoute -DestinationPrefix $prefix -InterfaceIndex $tun.ifIndex `
+      -NextHop $gateway -RouteMetric 1 -PolicyStore ActiveStore `
+      -ErrorAction Stop | Out-Null
+  }}
+}}
+{dns_repair}
+"""
+        run_powershell(script, timeout=20)
+
     def _verification_checks_script(self) -> str:
         dns_check = ""
         if self.manage_dns:

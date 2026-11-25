@@ -32,6 +32,7 @@ from .profiles import (
     remove_profile,
     select_profile,
 )
+from .routes import resolve_ipv4
 from .windows_app import (
     WINDOWS_APP_VERSION,
     WindowsAppPaths,
@@ -48,6 +49,7 @@ from .windows_app import (
     tail_text,
     write_pid,
 )
+from .windows_guard import WindowsPublicGuard
 
 
 APP_TITLE = "pyvpn"
@@ -73,6 +75,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--ready-file", type=Path)
     parser.add_argument("--log-file", type=Path)
     parser.add_argument("--error-log-file", type=Path)
+    parser.add_argument("--guard-server-ip")
+    parser.add_argument("--guard-data-dir", type=Path)
     return parser
 
 
@@ -129,6 +133,15 @@ def _run_worker_with_logs(args: argparse.Namespace) -> int:
             "--ready-file",
             str(args.ready_file),
         ]
+        if args.guard_server_ip and args.guard_data_dir:
+            client_args.extend(
+                [
+                    "--server-ip-override",
+                    args.guard_server_ip,
+                    "--guard-data-dir",
+                    str(args.guard_data_dir),
+                ]
+            )
         return _run_client_with_retries(client_args, args.stop_file)
     except SystemExit as exc:
         if exc.code not in (None, 0):
@@ -367,6 +380,11 @@ class PyVpnWindowsApp:
         self.failure_reported_for: int | None = None
         self.log_start_offset = 0
         self.error_log_start_offset = 0
+        self.guard = WindowsPublicGuard(paths.data_dir)
+        try:
+            self.guard_active = self.guard.active()
+        except PlatformError:
+            self.guard_active = True
 
         self.root.title(f"{APP_TITLE} - Windows 客户端")
         self.root.geometry("880x590")
@@ -464,6 +482,10 @@ class PyVpnWindowsApp:
         ttk.Button(toolbar, text="查看日志", command=self._open_logs).pack(
             side="right", padx=(0, 8)
         )
+        self.release_button = ttk.Button(
+            toolbar, text="解除保护", command=self.release_guard
+        )
+        self.release_button.pack(side="right", padx=(0, 8))
 
         table_frame = ttk.Frame(outer, style="Surface.TFrame", padding=1)
         table_frame.grid(row=2, column=0, sticky="nsew")
@@ -586,7 +608,11 @@ class PyVpnWindowsApp:
             has_servers = bool(self._load_store().servers)
         except ProfileError:
             has_servers = False
-        self.speed_button.configure(state="normal" if has_servers else "disabled")
+        can_test = has_servers and (not self.guard_active or self.connection_state == "connected")
+        self.speed_button.configure(state="normal" if can_test else "disabled")
+        self.release_button.configure(
+            state="normal" if self.guard_active and not self._running_pid() else "disabled"
+        )
         if self.connection_state == "disconnecting":
             self.connect_button.configure(state="disabled")
         else:
@@ -722,6 +748,8 @@ class PyVpnWindowsApp:
             self.status_label.configure(text=f"已切换到 {server_id}", foreground=ACCENT)
 
     def test_all_latency(self) -> None:
+        if self.guard_active and self.connection_state != "connected":
+            return
         try:
             profiles = list(self._load_store().servers.values())
         except ProfileError as exc:
@@ -766,7 +794,7 @@ class PyVpnWindowsApp:
 
         threading.Thread(target=runner, name="pyvpn-latency", daemon=True).start()
 
-    def _worker_command(self, server_id: str) -> list[str]:
+    def _worker_command(self, server_id: str, server_ip: str) -> list[str]:
         if getattr(sys, "frozen", False):
             command = [sys.executable]
         else:
@@ -788,6 +816,10 @@ class PyVpnWindowsApp:
                 str(self.paths.log),
                 "--error-log-file",
                 str(self.paths.error_log),
+                "--guard-server-ip",
+                server_ip,
+                "--guard-data-dir",
+                str(self.paths.data_dir),
             ]
         )
         return command
@@ -823,17 +855,38 @@ class PyVpnWindowsApp:
             return
         if self._running_pid():
             return
-        self.paths.data_dir.mkdir(parents=True, exist_ok=True)
+        profile = store.servers[server_id]
+        if profile.bypass_ips:
+            messagebox.showerror(
+                "无法启用断线保护",
+                "当前节点有直连绕过地址。请先在节点配置中清除 bypass_ips。",
+                parent=self.root,
+            )
+            return
+        try:
+            self.paths.data_dir.mkdir(parents=True, exist_ok=True)
+            self.log_start_offset = begin_log_session(self.paths.log, server_id)
+            self.error_log_start_offset = begin_log_session(self.paths.error_log, server_id)
+        except OSError as exc:
+            messagebox.showerror("无法写入日志", str(exc), parent=self.root)
+            return
+        try:
+            server_ip = resolve_ipv4(profile.server_host)
+            self.guard.enable([server_ip])
+            self.guard_active = True
+        except (OSError, PlatformError) as exc:
+            self._log_guard_event(self.paths.error_log, f"public guard activation failed: {exc}")
+            messagebox.showerror("无法启用断线保护", str(exc), parent=self.root)
+            return
+        self._log_guard_event(self.paths.log, f"public guard active: control server {server_ip}")
         for stale in (self.paths.stop, self.paths.ready, self.paths.pid):
             try:
                 stale.unlink()
             except OSError:
                 pass
         try:
-            self.log_start_offset = begin_log_session(self.paths.log, server_id)
-            self.error_log_start_offset = begin_log_session(self.paths.error_log, server_id)
             self.child = subprocess.Popen(
-                self._worker_command(server_id),
+                self._worker_command(server_id, server_ip),
                 cwd=self.paths.executable_dir,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -841,7 +894,9 @@ class PyVpnWindowsApp:
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except OSError as exc:
-            messagebox.showerror("无法启动", str(exc), parent=self.root)
+            messagebox.showerror(
+                "无法启动", f"{exc}\n公网保护仍生效，可点击“解除保护”。", parent=self.root
+            )
             return
         self.connected_server_id = server_id
         self.expected_stop = False
@@ -887,8 +942,12 @@ class PyVpnWindowsApp:
                 self.expected_stop = False
                 self.root.after(350, self._connect)
             elif self.close_after_stop:
-                self._destroy()
-                return
+                if self._disable_guard():
+                    self._destroy()
+                    return
+                self.close_after_stop = False
+            elif self.expected_stop and self.guard_active:
+                self._disable_guard()
             elif (
                 was_running
                 and not self.expected_stop
@@ -920,7 +979,10 @@ class PyVpnWindowsApp:
             self.status_label.configure(text="正在断开...", foreground=WARNING)
             self.connect_button.configure(text="断开中...", state="disabled")
         else:
-            self.status_label.configure(text="未连接", foreground=MUTED)
+            self.status_label.configure(
+                text="公网已阻断" if self.guard_active else "未连接",
+                foreground=WARNING if self.guard_active else MUTED,
+            )
             self.connect_button.configure(text="连接")
         self._update_controls()
 
@@ -945,6 +1007,30 @@ class PyVpnWindowsApp:
             os.startfile(self.paths.data_dir)
         except OSError as exc:
             messagebox.showerror("无法打开日志", str(exc), parent=self.root)
+
+    def _disable_guard(self) -> bool:
+        try:
+            self.guard.disable()
+        except PlatformError as exc:
+            messagebox.showerror("解除保护失败", str(exc), parent=self.root)
+            return False
+        self.guard_active = False
+        self._log_guard_event(self.paths.log, "public guard disabled by user")
+        return True
+
+    @staticmethod
+    def _log_guard_event(path: Path, message: str) -> None:
+        try:
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(f"[{datetime.now().astimezone().isoformat(timespec='seconds')}] {message}\n")
+        except OSError:
+            pass
+
+    def release_guard(self) -> None:
+        if self._running_pid() or not self.guard_active:
+            return
+        if self._disable_guard():
+            self._refresh_process_state()
 
     def _show_about(self) -> None:
         dialog = tk.Toplevel(self.root)
@@ -991,9 +1077,18 @@ class PyVpnWindowsApp:
         if self._running_pid():
             if not messagebox.askyesno("退出 pyvpn", "VPN 仍在连接。断开 VPN 并退出？", parent=self.root):
                 return
+            self.pending_reconnect = False
             self.close_after_stop = True
             self._request_disconnect()
             return
+        if self.guard_active:
+            choice = messagebox.askyesnocancel(
+                "退出 pyvpn",
+                "公网保护仍在阻断直连。退出前解除保护吗？\n选择“否”会保留断网保护。",
+                parent=self.root,
+            )
+            if choice is None or (choice and not self._disable_guard()):
+                return
         self._destroy()
 
     def _destroy(self) -> None:

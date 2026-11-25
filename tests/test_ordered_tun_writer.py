@@ -201,9 +201,10 @@ def test_server_queues_authenticated_data_in_order() -> None:
         expected = [_packet("10.8.0.2", "1.1.1.1", marker) for marker in range(3)]
         for seq, plaintext in enumerate(expected, 1):
             encrypted = seal_packet(PACKET_TYPE_DATA, 7, seq, plaintext, session.c2s_cipher)
-            server.handle_udp_datagram(encrypted, ("192.0.2.10", 50000))
+            address = ("192.0.2.10", 50000) if seq < 3 else ("198.51.100.20", 51000)
+            server.handle_udp_datagram(encrypted, address)
         await _drain(server.tun_writer, len(expected))
         assert tun.packets == expected
-        assert session.client_addr == ("192.0.2.10", 50000)
+        assert session.client_addr == ("198.51.100.20", 51000)
 
     asyncio.run(scenario())

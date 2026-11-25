@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Mapping
 
 
-WINDOWS_APP_VERSION = "0.1.0-r6"
+WINDOWS_APP_VERSION = "0.1.0-r7"
 LOG_MAX_BYTES = 5 * 1024 * 1024
 
 

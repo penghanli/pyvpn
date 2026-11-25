@@ -8,7 +8,7 @@ import pytest
 
 from pyvpn import client as client_module
 from pyvpn.client import ClientConfig, ClientSession, VpnClient
-from pyvpn.constants import PACKET_TYPE_DATA, PACKET_TYPE_KEEPALIVE
+from pyvpn.constants import CONTROL_VERSION, PACKET_TYPE_DATA, PACKET_TYPE_KEEPALIVE
 from pyvpn.crypto import TunnelCipher, new_session_keys
 from pyvpn.errors import AuthenticationError, PlatformError, TunnelUnavailableError
 from pyvpn.packet import open_packet, seal_packet
@@ -54,6 +54,31 @@ def make_client() -> tuple[VpnClient, FakeUdpTransport]:
     client.udp_transport = transport
     client.server_udp_addr = ("127.0.0.1", 8444)
     return client, transport
+
+
+def test_guarded_client_reuses_pinned_ip_for_matching_udp_hostname(monkeypatch) -> None:
+    client, _ = make_client()
+    client.config.server_host = "vpn.example.com"
+    client.config.server_ip_override = "203.0.113.10"
+    keys = new_session_keys()
+    monkeypatch.setattr(
+        client_module,
+        "resolve_ipv4",
+        lambda _host: (_ for _ in ()).throw(AssertionError("unexpected DNS lookup")),
+    )
+    session = client._parse_accept(
+        {
+            "type": "accept",
+            "version": CONTROL_VERSION,
+            "session_id": 8,
+            "client_vip": "10.8.0.2/24",
+            "server_vip": "10.8.0.1",
+            "dns": ["1.1.1.1"],
+            "udp_endpoint": {"host": "vpn.example.com", "port": 8444},
+            "crypto": keys.to_json(),
+        }
+    )
+    assert session.udp_host == "203.0.113.10"
 
 
 def test_client_waits_for_authenticated_udp_response() -> None:
@@ -212,6 +237,7 @@ def test_windows_route_drift_requests_reconnect(monkeypatch) -> None:
         raise PlatformError("server bypass route changed")
 
     monkeypatch.setattr(network, "verify", route_changed)
+    monkeypatch.setattr(network, "repair", lambda: (_ for _ in ()).throw(PlatformError("repair failed")))
     with pytest.raises(TunnelUnavailableError, match="Windows route or DNS changed"):
         asyncio.run(client.windows_route_health_loop())
 
@@ -222,17 +248,26 @@ def test_windows_route_health_tolerates_one_failed_check(monkeypatch) -> None:
     client.network = network
     monkeypatch.setattr(client_module, "WINDOWS_ROUTE_CHECK_INTERVAL", 0)
     checks = 0
+    repairs = 0
 
     def intermittent_check() -> None:
         nonlocal checks
         checks += 1
         if checks in (1, 3, 4):
             raise PlatformError("Find-NetRoute: System Error 1232")
+        if checks == 6:
+            raise RuntimeError("test complete")
+
+    def repair() -> None:
+        nonlocal repairs
+        repairs += 1
 
     monkeypatch.setattr(network, "verify", intermittent_check)
-    with pytest.raises(TunnelUnavailableError, match="Windows route or DNS changed"):
+    monkeypatch.setattr(network, "repair", repair)
+    with pytest.raises(RuntimeError, match="test complete"):
         asyncio.run(client.windows_route_health_loop())
-    assert checks == 4
+    assert checks == 6
+    assert repairs == 1
 
 
 def test_client_forwards_wintun_batch_in_order() -> None:

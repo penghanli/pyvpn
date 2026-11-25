@@ -14,11 +14,31 @@ target computer does not need Python or an internet connection.
    bandwidth measurement.
 
 Connected means an authenticated UDP response was received from the server.
-The app keeps retrying after network loss or a Windows route/DNS change, shows
+The app first tries to repair routes after a Windows network change and keeps retrying if needed, showing
 "Reconnecting" while it retries, and tolerates a brief failed route check. A pending
 connection can be cancelled.
 This version writes decrypted UDP data to Wintun in order and in batches, and
 reconnects when Wintun writes remain blocked.
+
+Before connecting, the GUI installs persistent Windows Firewall block rules on wired and
+wireless interfaces. Only the selected server IPv4 is exempted; other public IPv4,
+public IPv6, and physical-interface TCP/UDP DNS on port 53 are blocked. LAN and DHCP
+remain available for network handover. The rules stay active through retries and a worker
+crash; they are removed on an intentional disconnect or with the Release protection button.
+Profiles containing `bypass_ips` cannot connect in this mode. There is no automatic server
+switching, so the VPN exit IP remains the same if reconnecting to the same server.
+Latency testing is disabled while the guard is active and the VPN is disconnected;
+after connection, latency tests run through the active VPN.
+
+If the EXE cannot open, recover internet access in an elevated PowerShell:
+
+```powershell
+Get-NetFirewallRule -PolicyStore PersistentStore -Name 'pyvpn-public-guard-*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+```
+
+Firewall policy changes, non-wired/non-wireless uplinks, and local-network traffic are
+outside this guard's scope. Test link loss and IPv6 on each target machine before relying
+on it. Spoofing the client's source IP cannot make an unreachable server reachable.
 
 Profiles, the client ID, and logs normally stay in `pyvpn-data` beside the executable. When
 the executable is placed in the root of an installed Windows offline package,

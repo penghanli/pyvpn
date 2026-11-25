@@ -11,9 +11,27 @@
 3. 选择节点后点击“切换到此节点”，再点击“连接”。
 4. “全部测速”测试各节点 TCP 控制端口的连接延迟；该数值不是下载带宽。
 
-“已连接”表示已收到服务端加密 UDP 回包。网络中断或 Windows 路由/DNS 变化后程序会持续尝试重连，
-界面会显示“正在重连”；此时可点击“取消连接”。短暂的路由检查失败不会立刻断开现有连接。
+“已连接”表示已收到服务端加密 UDP 回包。网络中断或 Windows 路由/DNS 变化后程序会先尝试修复路由，
+必要时持续重连；此时可点击“取消连接”。短暂的路由检查失败不会立刻断开现有连接。
 本版将 UDP 数据按顺序批量写入虚拟网卡，并在 Wintun 写入持续失败时重连。
+
+连接前，图形版会在 Windows 防火墙中创建持久的公网阻断规则：物理有线/无线网卡只允许连接当前节点的
+服务器 IPv4，其他公网 IPv4 和 IPv6 出站被阻断，物理网卡的 TCP/UDP 53 DNS 也被阻断。
+局域网和 DHCP 流量仍然允许，以便换 Wi-Fi 后拿到地址。重连期间及连接进程意外退出后，规则会继续生效；
+不会自动切换节点或改变 VPN 出口 IP。主动断开时会移除规则；若进程异常退出，可在图形界面点击
+“解除保护”。启用保护时，含 `bypass_ips` 的节点不能连接。
+保护已启用但 VPN 未连接时，测速会暂时禁用，以免把被本机防火墙拦截误判为节点不可达；
+连接后测速将经过当前 VPN。
+
+若 EXE 无法打开且需要恢复公网，请在管理员 PowerShell 执行：
+
+```powershell
+Get-NetFirewallRule -PolicyStore PersistentStore -Name 'pyvpn-public-guard-*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+```
+
+这只移除 pyvpn 图形版的阻断规则。请勿在仍需保护时运行。防火墙被系统策略关闭、其他软件改写规则、
+使用非有线/无线的物理联网方式等情况不在此保护范围内；正式依赖它前应在目标机器上测试断线和 IPv6。
+`ping` 不通服务器不等于 8443/TCP 和 8444/UDP 不通；伪造本地源 IP 不能让被阻断的服务器变为可达。
 
 节点、客户端 ID 和日志默认保存在 EXE 同目录的 `pyvpn-data`。如果 EXE 放在已安装的
 Windows 离线包根目录，程序会优先复用
@@ -60,7 +78,7 @@ python windows_gui\build.py
 
 - `pyvpn.exe`
 - `pyvpn.exe.sha256`
-- `pyvpn-windows-x64-0.1.0-r6.zip`
+- `pyvpn-windows-x64-0.1.0-r7.zip`
 
 构建脚本固定并校验 Wintun 0.14.1 官方压缩包，使用 PyInstaller
 `--onefile --windowed --uac-admin`。当前构建没有 Authenticode 商业代码签名；
