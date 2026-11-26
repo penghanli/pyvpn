@@ -148,6 +148,7 @@ def test_windows_build_requests_single_file_uac_executable() -> None:
     assert '"--add-binary"' in source
 
 
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows Tk GUI")
 def test_closing_gui_cancels_pending_node_switch(monkeypatch) -> None:
     from pyvpn import windows_gui
 
