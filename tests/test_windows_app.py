@@ -74,6 +74,7 @@ def test_native_windows_architecture_prefers_native_environment_value() -> None:
     ) == "amd64"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows process APIs")
 def test_worker_pid_file_rejects_reused_pid_and_legacy_record(
     tmp_path: Path, monkeypatch
 ) -> None:
