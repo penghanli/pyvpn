@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import os
 import platform
 import signal
@@ -40,6 +41,15 @@ UDP_STALE_TIMEOUT = 40.0
 WINDOWS_ROUTE_CHECK_INTERVAL = 10.0
 WINDOWS_ROUTE_FAILURE_LIMIT = 2
 CLI_RECONNECT_DELAYS = (1, 2, 4, 8, 15, 30)
+
+
+def _resolve_control_ip(host: str, fallback: str | None) -> str:
+    try:
+        return resolve_ipv4(host)
+    except OSError:
+        if fallback is None:
+            raise
+        return fallback
 
 
 @dataclass
@@ -121,7 +131,19 @@ class VpnClient:
             f"connecting to {self.config.server_host}:{self.config.control_port}",
             flush=True,
         )
-        server_ip = self.config.server_ip_override or resolve_ipv4(self.config.server_host)
+        server_ip = _resolve_control_ip(
+            self.config.server_host, self.config.server_ip_override
+        )
+        if (
+            current_platform == "Windows"
+            and self.config.guard_data_dir
+            and server_ip != self.config.server_ip_override
+        ):
+            from .windows_guard import WindowsPublicGuard
+
+            await asyncio.to_thread(
+                WindowsPublicGuard(Path(self.config.guard_data_dir)).enable, [server_ip]
+            )
         print(f"resolved server IPv4: {server_ip}", flush=True)
         try:
             reader, writer = await asyncio.wait_for(
@@ -142,13 +164,14 @@ class VpnClient:
                 elif message.startswith("server is full:"):
                     raise TunnelUnavailableError(message)
                 raise AuthenticationError(message)
-            self.session = self._parse_accept(accept)
+            self.session = self._parse_accept(accept, server_ip=server_ip)
             if current_platform == "Windows" and self.config.guard_data_dir:
                 from .windows_guard import WindowsPublicGuard
 
                 await asyncio.to_thread(
                     WindowsPublicGuard(Path(self.config.guard_data_dir)).enable,
                     [server_ip, self.session.udp_host],
+                    self.session.client_vip,
                 )
             print(
                 "control session accepted: "
@@ -317,7 +340,7 @@ class VpnClient:
             },
         )
 
-    def _parse_accept(self, message: dict[str, object]) -> ClientSession:
+    def _parse_accept(self, message: dict[str, object], *, server_ip: str | None = None) -> ClientSession:
         if message.get("type") != "accept" or message.get("version") != CONTROL_VERSION:
             raise ProtocolError("server did not send an accept frame")
         crypto = message.get("crypto")
@@ -332,11 +355,16 @@ class VpnClient:
             udp_host = self.config.server_host
         keys = SessionKeys.from_json(crypto)
         client_vip = str(message["client_vip"]).split("/", 1)[0]
-        udp_ip = (
-            self.config.server_ip_override
-            if udp_host == self.config.server_host and self.config.server_ip_override
-            else resolve_ipv4(udp_host)
-        )
+        udp_ip = str(endpoint.get("ipv4") or "")
+        if udp_host == self.config.server_host and (server_ip or self.config.server_ip_override):
+            udp_ip = server_ip or self.config.server_ip_override
+        elif udp_ip and self.config.guard_data_dir:
+            try:
+                udp_ip = str(ipaddress.IPv4Address(udp_ip))
+            except ipaddress.AddressValueError as exc:
+                raise ProtocolError("server sent an invalid UDP IPv4 address") from exc
+        else:
+            udp_ip = resolve_ipv4(udp_host)
         return ClientSession(
             session_id=int(message["session_id"]),
             client_vip=client_vip,

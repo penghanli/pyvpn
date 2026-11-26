@@ -10,7 +10,7 @@ from pyvpn import client as client_module
 from pyvpn.client import ClientConfig, ClientSession, VpnClient
 from pyvpn.constants import CONTROL_VERSION, PACKET_TYPE_DATA, PACKET_TYPE_KEEPALIVE
 from pyvpn.crypto import TunnelCipher, new_session_keys
-from pyvpn.errors import AuthenticationError, PlatformError, TunnelUnavailableError
+from pyvpn.errors import AuthenticationError, PlatformError, ProtocolError, TunnelUnavailableError
 from pyvpn.packet import open_packet, seal_packet
 from pyvpn.routes import WindowsClientNetwork
 
@@ -79,6 +79,94 @@ def test_guarded_client_reuses_pinned_ip_for_matching_udp_hostname(monkeypatch) 
         }
     )
     assert session.udp_host == "203.0.113.10"
+
+
+def test_client_uses_server_supplied_udp_ip_for_distinct_hostname(monkeypatch) -> None:
+    client, _ = make_client()
+    client.config.guard_data_dir = "C:/pyvpn-data"
+    keys = new_session_keys()
+    monkeypatch.setattr(
+        client_module,
+        "resolve_ipv4",
+        lambda _host: (_ for _ in ()).throw(AssertionError("unexpected DNS lookup")),
+    )
+    accept = {
+        "type": "accept",
+        "version": CONTROL_VERSION,
+        "session_id": 8,
+        "client_vip": "10.8.0.2/24",
+        "server_vip": "10.8.0.1",
+        "dns": ["1.1.1.1"],
+        "udp_endpoint": {"host": "udp.example.com", "ipv4": "203.0.113.20", "port": 8444},
+        "crypto": keys.to_json(),
+    }
+    assert client._parse_accept(accept).udp_host == "203.0.113.20"
+    accept["udp_endpoint"]["ipv4"] = "bad.example.com"
+    with pytest.raises(ProtocolError, match="invalid UDP IPv4"):
+        client._parse_accept(accept)
+
+
+def test_unguarded_client_keeps_resolving_udp_hostname(monkeypatch) -> None:
+    client, _ = make_client()
+    keys = new_session_keys()
+    monkeypatch.setattr(client_module, "resolve_ipv4", lambda _host: "203.0.113.21")
+    session = client._parse_accept(
+        {
+            "type": "accept",
+            "version": CONTROL_VERSION,
+            "session_id": 8,
+            "client_vip": "10.8.0.2/24",
+            "server_vip": "10.8.0.1",
+            "dns": ["1.1.1.1"],
+            "udp_endpoint": {
+                "host": "udp.example.com", "ipv4": "203.0.113.20", "port": 8444
+            },
+            "crypto": keys.to_json(),
+        }
+    )
+    assert session.udp_host == "203.0.113.21"
+
+
+def test_client_prefers_connected_ip_over_stale_server_dns(monkeypatch) -> None:
+    client, _ = make_client()
+    client.config.server_host = "vpn.example.com"
+    keys = new_session_keys()
+    monkeypatch.setattr(
+        client_module,
+        "resolve_ipv4",
+        lambda _host: (_ for _ in ()).throw(AssertionError("unexpected DNS lookup")),
+    )
+    session = client._parse_accept(
+        {
+            "type": "accept",
+            "version": CONTROL_VERSION,
+            "session_id": 8,
+            "client_vip": "10.8.0.2/24",
+            "server_vip": "10.8.0.1",
+            "dns": ["1.1.1.1"],
+            "udp_endpoint": {
+                "host": "vpn.example.com", "ipv4": "203.0.113.10", "port": 8444
+            },
+            "crypto": keys.to_json(),
+        },
+        server_ip="203.0.113.11",
+    )
+    assert session.udp_host == "203.0.113.11"
+
+
+def test_control_host_is_resolved_again_before_falling_back(monkeypatch) -> None:
+    values = iter(["203.0.113.10", "203.0.113.11"])
+    monkeypatch.setattr(client_module, "resolve_ipv4", lambda _host: next(values))
+    assert client_module._resolve_control_ip("vpn.example.com", "203.0.113.9") == "203.0.113.10"
+    assert client_module._resolve_control_ip("vpn.example.com", "203.0.113.9") == "203.0.113.11"
+
+    def failed(_host: str) -> str:
+        raise OSError("DNS unavailable")
+
+    monkeypatch.setattr(client_module, "resolve_ipv4", failed)
+    assert client_module._resolve_control_ip("vpn.example.com", "203.0.113.9") == "203.0.113.9"
+    with pytest.raises(OSError, match="DNS unavailable"):
+        client_module._resolve_control_ip("vpn.example.com", None)
 
 
 def test_client_waits_for_authenticated_udp_response() -> None:
@@ -348,13 +436,16 @@ def test_windows_worker_honors_stop_during_recovery(monkeypatch, tmp_path: Path)
     assert not stop_file.exists()
 
 
-def test_windows_client_id_is_stable_across_restarts(tmp_path: Path) -> None:
+def test_windows_client_id_is_stable_across_restarts(tmp_path: Path, monkeypatch) -> None:
     windows_gui = pytest.importorskip("pyvpn.windows_gui")
+    monkeypatch.setattr(windows_gui, "_machine_guid", lambda: "machine-a")
     path = tmp_path / "client.id"
     first = windows_gui._persistent_client_id(path)
     second = windows_gui._persistent_client_id(path)
     assert first == second
-    assert path.read_text(encoding="ascii").strip() == first
+    assert path.read_text(encoding="ascii").strip() != first
+    monkeypatch.setattr(windows_gui, "_machine_guid", lambda: "machine-b")
+    assert windows_gui._persistent_client_id(path) != first
 
 
 def test_cli_reconnect_keeps_one_client_id(monkeypatch) -> None:

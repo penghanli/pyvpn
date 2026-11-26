@@ -8,7 +8,8 @@ target computer does not need Python or an internet connection.
 
 1. Double-click `pyvpn.exe` and approve the UAC administrator prompt.
 2. Select Add server and enter an ID, host, control port, shared token, and
-   the server certificate SHA-256 fingerprint.
+   the server certificate SHA-256 fingerprint. New profiles default to a
+   `LocalNetwork` adapter name, which can be edited per profile.
 3. Select the server, choose Switch to this server, and then Connect.
 4. Test all measures TCP control-port connection latency. It is not a
    bandwidth measurement.
@@ -20,10 +21,10 @@ connection can be cancelled.
 This version writes decrypted UDP data to Wintun in order and in batches, and
 reconnects when Wintun writes remain blocked.
 
-Before connecting, the GUI installs persistent Windows Firewall block rules on wired and
-wireless interfaces. Only the selected server IPv4 is exempted; other public IPv4,
-public IPv6, and physical-interface TCP/UDP DNS on port 53 are blocked. LAN and DHCP
-remain available for network handover. The rules stay active through retries and a worker
+Before connecting, the GUI installs persistent Windows Firewall rules across all
+interfaces. Except for the VPN virtual source address, only the selected server IPv4
+is exempted; other public IPv4 and IPv6 destinations, including public DNS, are blocked.
+LAN DNS and DHCP remain available for network handover and hostname refresh. The rules stay active through retries and a worker
 crash; they are removed on an intentional disconnect or with the Release protection button.
 Profiles containing `bypass_ips` cannot connect in this mode. There is no automatic server
 switching, so the VPN exit IP remains the same if reconnecting to the same server.
@@ -36,9 +37,14 @@ If the EXE cannot open, recover internet access in an elevated PowerShell:
 Get-NetFirewallRule -PolicyStore PersistentStore -Name 'pyvpn-public-guard-*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 ```
 
-Firewall policy changes, non-wired/non-wireless uplinks, and local-network traffic are
-outside this guard's scope. Test link loss and IPv6 on each target machine before relying
-on it. Spoofing the client's source IP cannot make an unreachable server reachable.
+Firewall policy changes, other proxies or virtual adapters, and local-network traffic
+still require testing on each target machine. Test link loss, network handover, and IPv6
+before relying on the guard. Spoofing the client's source IP cannot make an unreachable server reachable.
+The adapter name is only a local Windows label; it does not hide the Wintun driver,
+process, or traffic pattern. Existing profiles retain their adapter names. Disconnect,
+edit the profile's adapter name, and reconnect to rename it; the previous virtual adapter
+is not removed automatically. A hostname is resolved again on reconnect. If the guarded
+machine only has public DNS, hostname updates can fail; use reachable LAN DNS or a server IPv4.
 
 Profiles, the client ID, and logs normally stay in `pyvpn-data` beside the executable. When
 the executable is placed in the root of an installed Windows offline package,
@@ -51,7 +57,9 @@ in the server list, but they are stored in plaintext in the local
 `servers.json`; do not share the data directory or profile file. The app tries
 to restrict a newly created data directory to Windows Administrators and
 SYSTEM. Every connection validates the configured certificate fingerprint.
-Keep `pyvpn-data` when replacing the EXE to retain profiles and the client ID.
+Keep `pyvpn-data` when replacing the EXE to retain profiles. The client ID stays stable
+on one machine, but a copied data directory derives a different ID on another Windows
+machine so the two installations do not replace each other's server sessions.
 
 Use View logs to open the data directory. `client.log` records connection attempts;
 `client.err.log` records retry reasons and failures. Logs append across sessions and

@@ -220,7 +220,9 @@ class WindowsTunDevice(TunDevice):
         api = _WintunApi(_find_wintun_dll())
         adapter = api.dll.WintunOpenAdapter(name)
         if not adapter:
-            adapter = api.dll.WintunCreateAdapter(name, "PyVpn", None)
+            adapter = api.dll.WintunCreateAdapter(
+                name, "LocalNetwork" if name == "LocalNetwork" else "PyVpn", None
+            )
         if not adapter:
             raise PlatformError(f"WintunCreateAdapter failed: {ctypes.get_last_error()}")
 

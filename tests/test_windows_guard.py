@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import subprocess
 from pathlib import Path
 
@@ -31,6 +32,13 @@ def test_public_guard_blocks_public_destinations_but_keeps_server_and_lan() -> N
     assert not _matches("ff02::1", blocked_v6)
 
 
+def test_public_guard_local_address_filter_excludes_only_tunnel_vip() -> None:
+    physical_sources = windows_guard._blocked_networks(4, ["10.8.0.2/32"])
+    assert _matches("192.168.1.20", physical_sources)
+    assert _matches("10.8.0.3", physical_sources)
+    assert not _matches("10.8.0.2", physical_sources)
+
+
 def test_public_guard_installs_new_rules_before_removing_old_ones(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -42,18 +50,49 @@ def test_public_guard_installs_new_rules_before_removing_old_ones(
 
     monkeypatch.setattr(windows_guard, "run_powershell", fake_run)
     guard = windows_guard.WindowsPublicGuard(tmp_path)
-    guard.enable(["203.0.113.10", "203.0.113.11"])
+    guard.enable(["203.0.113.10", "203.0.113.11"], "10.8.0.2")
 
     script = scripts[0]
-    assert script.count("New-NetFirewallRule -Name") == 8
+    assert script.count("New-NetFirewallRule -Name") == 2
     assert script.index("New-NetFirewallRule -Name") < script.index("Where-Object { $names -notcontains $_.Name }")
     assert "-PolicyStore ActiveStore" in script
-    assert "-InterfaceType Wired" in script
-    assert "-InterfaceType Wireless" in script
-    assert script.count("-RemotePort 53") == 4
+    assert "-InterfaceType" not in script
+    assert "-LocalAddress @(" in script
+    assert "-RemotePort 53" not in script
+    assert "10.8.0.2/32" not in script
     assert guard.prefix in script
     assert "203.0.113.10/32" not in script
     assert "203.0.113.11/32" not in script
+
+
+def test_public_guard_status_requires_effective_rule_pair_and_profiles(
+    monkeypatch, tmp_path: Path
+) -> None:
+    guard = windows_guard.WindowsPublicGuard(tmp_path)
+    name = f"{guard.prefix}generation"
+    state = {
+        "present": 2,
+        "profilesOk": True,
+        "effective": [
+            {"name": name + "-v4", "enabled": True, "block": True},
+            {"name": name + "-v6", "enabled": True, "block": True},
+        ],
+    }
+
+    def fake_run(_script: str, *, timeout: float = 30) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 0, json.dumps(state), "")
+
+    monkeypatch.setattr(windows_guard, "run_powershell", fake_run)
+    assert guard.status() == "active"
+    state["effective"].pop()
+    assert guard.status() == "invalid"
+    state["effective"].append(
+        {"name": name + "-v6", "enabled": True, "block": True}
+    )
+    state["profilesOk"] = False
+    assert guard.status() == "invalid"
+    state["present"] = 0
+    assert guard.status() == "absent"
 
 
 def test_public_guard_rejects_invalid_server_ip(tmp_path: Path) -> None:
@@ -65,14 +104,17 @@ def test_public_guard_rejects_invalid_server_ip(tmp_path: Path) -> None:
 @pytest.mark.skipif(__import__("os").name != "nt", reason="requires Windows PowerShell")
 def test_public_guard_powershell_parses(monkeypatch, tmp_path: Path) -> None:
     scripts: list[str] = []
-    monkeypatch.setattr(
-        windows_guard,
-        "run_powershell",
-        lambda script, **_kwargs: scripts.append(script),
-    )
+    def capture(script: str, **_kwargs) -> subprocess.CompletedProcess[str]:
+        scripts.append(script)
+        return subprocess.CompletedProcess(
+            [], 0, '{"present":0,"profilesOk":true,"effective":[]}', ""
+        )
+
+    monkeypatch.setattr(windows_guard, "run_powershell", capture)
     guard = windows_guard.WindowsPublicGuard(tmp_path)
     guard.enable(["203.0.113.10"])
     guard.disable()
+    assert guard.status() == "absent"
     parser = (
         "$tokens=$null;$errors=$null;"
         "[System.Management.Automation.Language.Parser]::ParseInput("

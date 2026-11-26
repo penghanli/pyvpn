@@ -62,6 +62,8 @@ ACCENT_DARK = "#05665d"
 DANGER = "#b42318"
 WARNING = "#9a6700"
 RECONNECT_DELAYS = (1, 2, 4, 8, 15, 30)
+GUARD_STATUS_INTERVAL = 30
+DEFAULT_GUI_TUN_NAME = "LocalNetwork"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -161,14 +163,32 @@ def _run_worker_with_logs(args: argparse.Namespace) -> int:
 
 def _persistent_client_id(path: Path) -> str:
     try:
-        return str(uuid.UUID(path.read_text(encoding="ascii").strip()))
+        identifier = uuid.UUID(path.read_text(encoding="ascii").strip())
     except (OSError, ValueError):
-        identifier = str(uuid.uuid4())
+        identifier = uuid.uuid4()
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(identifier + "\n", encoding="ascii")
+        temporary.write_text(str(identifier) + "\n", encoding="ascii")
         os.replace(temporary, path)
-        return identifier
+    machine_id = _machine_guid()
+    return str(uuid.uuid5(identifier, machine_id)) if machine_id else str(identifier)
+
+
+def _machine_guid() -> str | None:
+    if os.name != "nt":
+        return None
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Cryptography",
+            0,
+            winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+        ) as key:
+            return str(winreg.QueryValueEx(key, "MachineGuid")[0])
+    except (OSError, ValueError):
+        return None
 
 
 def _run_client_with_retries(client_args: list[str], stop_file: Path) -> int:
@@ -277,6 +297,9 @@ class ProfileDialog(tk.Toplevel):
         self.fingerprint = tk.StringVar(
             value=existing.cert_fingerprint if existing else "sha256:"
         )
+        self.tun_name = tk.StringVar(
+            value=existing.tun_name if existing else DEFAULT_GUI_TUN_NAME
+        )
         self.make_active = tk.BooleanVar(value=make_active)
         self.show_token = tk.BooleanVar(value=False)
 
@@ -290,6 +313,7 @@ class ProfileDialog(tk.Toplevel):
             ("控制端口", self.control_port),
             ("共享 Token", self.token),
             ("证书 SHA-256", self.fingerprint),
+            ("本机网卡名称", self.tun_name),
         )
         self.entries: list[ttk.Entry] = []
         for row, (label, variable) in enumerate(fields):
@@ -305,19 +329,19 @@ class ProfileDialog(tk.Toplevel):
         self.entries[3].configure(show="*")
         token_hint = "留空则保留原 Token" if existing else "Token 仅保存在本机节点文件中"
         ttk.Label(body, text=token_hint, style="Hint.TLabel").grid(
-            row=5, column=1, sticky="w", pady=(0, 5)
+            row=6, column=1, sticky="w", pady=(0, 5)
         )
         ttk.Checkbutton(
             body,
             text="显示 Token",
             variable=self.show_token,
             command=self._toggle_token,
-        ).grid(row=6, column=1, sticky="w", pady=(2, 4))
+        ).grid(row=7, column=1, sticky="w", pady=(2, 4))
         ttk.Checkbutton(
             body,
             text="保存后设为当前节点",
             variable=self.make_active,
-        ).grid(row=7, column=1, sticky="w", pady=(2, 10))
+        ).grid(row=8, column=1, sticky="w", pady=(2, 10))
 
         footer = ttk.Frame(self, padding=(24, 12, 24, 20), style="Surface.TFrame")
         footer.grid(row=1, column=0, sticky="ew")
@@ -352,7 +376,7 @@ class ProfileDialog(tk.Toplevel):
                 control_port=port,
                 token=token,
                 cert_fingerprint=normalize_fingerprint(self.fingerprint.get()),
-                tun_name=self.existing.tun_name if self.existing else "pyvpn0",
+                tun_name=self.tun_name.get().strip(),
                 mtu=self.existing.mtu if self.existing else 1280,
                 no_dns=self.existing.no_dns if self.existing else False,
                 bypass_ips=self.existing.bypass_ips if self.existing else (),
@@ -382,9 +406,13 @@ class PyVpnWindowsApp:
         self.error_log_start_offset = 0
         self.guard = WindowsPublicGuard(paths.data_dir)
         try:
-            self.guard_active = self.guard.active()
-        except PlatformError:
-            self.guard_active = True
+            self.guard_status = self.guard.status()
+        except (OSError, PlatformError, ValueError):
+            self.guard_status = "invalid"
+        self.guard_active = self.guard_status != "absent"
+        self.guard_status_revision = 0
+        self.next_guard_check = time.monotonic() + GUARD_STATUS_INTERVAL
+        self.guard_check_running = False
 
         self.root.title(f"{APP_TITLE} - Windows 客户端")
         self.root.geometry("880x590")
@@ -825,12 +853,12 @@ class PyVpnWindowsApp:
         return command
 
     def _running_pid(self) -> int | None:
-        pid = read_pid(self.paths.pid)
-        if pid and process_is_running(pid):
-            return pid
+        identity = read_pid(self.paths.pid)
+        if identity and process_is_running(identity):
+            return identity.pid
         if self.child is not None and self.child.poll() is None:
             return self.child.pid
-        if pid:
+        if self.paths.pid.is_file():
             try:
                 self.paths.pid.unlink()
             except OSError:
@@ -874,6 +902,8 @@ class PyVpnWindowsApp:
             server_ip = resolve_ipv4(profile.server_host)
             self.guard.enable([server_ip])
             self.guard_active = True
+            self.guard_status = "active"
+            self.guard_status_revision += 1
         except (OSError, PlatformError) as exc:
             self._log_guard_event(self.paths.error_log, f"public guard activation failed: {exc}")
             messagebox.showerror("无法启用断线保护", str(exc), parent=self.root)
@@ -919,6 +949,8 @@ class PyVpnWindowsApp:
         self._refresh_process_state()
 
     def _poll_process(self) -> None:
+        if not self.guard_check_running and time.monotonic() >= self.next_guard_check:
+            self._check_guard_status()
         running_pid = self._running_pid()
         was_running = self.last_running
         self.last_running = running_pid is not None
@@ -961,7 +993,12 @@ class PyVpnWindowsApp:
     def _refresh_process_state(self) -> None:
         state = self.connection_state
         server = self.connected_server_id or ""
-        if state == "connected":
+        if self.guard_status == "invalid" or (
+            state in {"connecting", "connected"} and self.guard_status != "active"
+        ):
+            self.status_label.configure(text="保护规则失效", foreground=DANGER)
+            self.connect_button.configure(text="断开" if state == "connected" else "取消连接")
+        elif state == "connected":
             label = f"已连接 {server}" if server else "已连接"
             self.status_label.configure(text=label, foreground=ACCENT)
             self.connect_button.configure(text="断开", state="normal")
@@ -980,7 +1017,7 @@ class PyVpnWindowsApp:
             self.connect_button.configure(text="断开中...", state="disabled")
         else:
             self.status_label.configure(
-                text="公网已阻断" if self.guard_active else "未连接",
+                text="公网保护规则已启用" if self.guard_active else "未连接",
                 foreground=WARNING if self.guard_active else MUTED,
             )
             self.connect_button.configure(text="连接")
@@ -1015,8 +1052,40 @@ class PyVpnWindowsApp:
             messagebox.showerror("解除保护失败", str(exc), parent=self.root)
             return False
         self.guard_active = False
+        self.guard_status = "absent"
+        self.guard_status_revision += 1
         self._log_guard_event(self.paths.log, "public guard disabled by user")
         return True
+
+    def _check_guard_status(self) -> None:
+        self.guard_check_running = True
+        self.next_guard_check = time.monotonic() + GUARD_STATUS_INTERVAL
+        revision = self.guard_status_revision
+
+        def check() -> None:
+            try:
+                status = self.guard.status()
+            except (OSError, PlatformError, ValueError):
+                status = "invalid"
+
+            def finish() -> None:
+                if revision != self.guard_status_revision:
+                    self.guard_check_running = False
+                    return
+                previous = self.guard_status
+                self.guard_status = status
+                self.guard_active = status != "absent"
+                self.guard_check_running = False
+                if status != previous:
+                    self._log_guard_event(self.paths.error_log, f"public guard status: {status}")
+                self._refresh_process_state()
+
+            try:
+                self.root.after(0, finish)
+            except tk.TclError:
+                pass
+
+        threading.Thread(target=check, name="pyvpn-guard-status", daemon=True).start()
 
     @staticmethod
     def _log_guard_event(path: Path, message: str) -> None:

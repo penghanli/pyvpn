@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 import os
 import subprocess
 import sys
@@ -12,8 +13,14 @@ from pathlib import Path
 from typing import Mapping
 
 
-WINDOWS_APP_VERSION = "0.1.0-r7"
+WINDOWS_APP_VERSION = "0.1.0-r8"
 LOG_MAX_BYTES = 5 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class WorkerIdentity:
+    pid: int
+    created_at: int
 
 
 @dataclass(frozen=True)
@@ -88,48 +95,77 @@ def native_windows_architecture(
     return (architecture or "unknown").lower()
 
 
-def process_is_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    if os.name != "nt":
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            return False
-        return True
-
+def _process_creation_time(pid: int) -> int | None:
+    if pid <= 0 or os.name != "nt":
+        return None
     kernel32 = ctypes.windll.kernel32
     kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_bool, ctypes.c_uint32]
     kernel32.OpenProcess.restype = ctypes.c_void_p
-    kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-    kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+    kernel32.GetProcessTimes.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+    ]
+    kernel32.GetProcessTimes.restype = ctypes.c_bool
     kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-    handle = kernel32.OpenProcess(0x00100000, False, pid)
+    kernel32.CloseHandle.restype = ctypes.c_bool
+    handle = kernel32.OpenProcess(0x1000, False, pid)
     if not handle:
-        return False
+        return None
     try:
-        return kernel32.WaitForSingleObject(handle, 0) == 0x00000102
+        created = wintypes.FILETIME()
+        exited = wintypes.FILETIME()
+        kernel = wintypes.FILETIME()
+        user = wintypes.FILETIME()
+        if not kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(created),
+            ctypes.byref(exited),
+            ctypes.byref(kernel),
+            ctypes.byref(user),
+        ):
+            return None
+        return (created.dwHighDateTime << 32) | created.dwLowDateTime
     finally:
         kernel32.CloseHandle(handle)
 
 
-def read_pid(path: Path) -> int | None:
+def process_is_running(identity: WorkerIdentity) -> bool:
+    if identity.pid <= 0 or identity.created_at <= 0:
+        return False
+    if os.name != "nt":
+        try:
+            os.kill(identity.pid, 0)
+        except OSError:
+            return False
+        return True
+    return _process_creation_time(identity.pid) == identity.created_at
+
+
+def read_pid(path: Path) -> WorkerIdentity | None:
     try:
-        value = int(path.read_text(encoding="ascii").strip())
+        pid_text, created_text = path.read_text(encoding="ascii").split()
+        identity = WorkerIdentity(int(pid_text), int(created_text))
     except (OSError, ValueError):
         return None
-    return value if value > 0 else None
+    return identity if identity.pid > 0 and identity.created_at > 0 else None
 
 
 def write_pid(path: Path, pid: int) -> None:
+    created_at = _process_creation_time(pid)
+    if created_at is None:
+        raise OSError("could not verify the Windows worker process identity")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(f"{pid}\n", encoding="ascii")
+    temporary.write_text(f"{pid} {created_at}\n", encoding="ascii")
     os.replace(temporary, path)
 
 
 def remove_pid_if_current(path: Path, pid: int) -> None:
-    if read_pid(path) != pid:
+    identity = read_pid(path)
+    if identity is None or identity.pid != pid or not process_is_running(identity):
         return
     try:
         path.unlink()

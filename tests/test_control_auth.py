@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+from pyvpn import server as server_module
 
 from pyvpn.constants import CONTROL_VERSION
 from pyvpn.framing import read_frame, write_frame
@@ -64,6 +65,27 @@ async def _authenticate(server_token: str, client_token: str) -> dict[str, objec
 def test_control_auth_accepts_an_identical_token() -> None:
     response = asyncio.run(_authenticate("same-token", "same-token"))
     assert response["type"] == "accept"
+    assert response["udp_endpoint"]["ipv4"] == "127.0.0.1"
+
+
+def test_server_closes_idle_unauthenticated_control_connection(monkeypatch) -> None:
+    monkeypatch.setattr(server_module, "CONTROL_HELLO_TIMEOUT", 0.02)
+
+    async def scenario() -> None:
+        server = VpnServer(_server_config("test-token"))
+        listener = await asyncio.start_server(server.handle_control, "127.0.0.1", 0)
+        port = listener.sockets[0].getsockname()[1]
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            assert await asyncio.wait_for(reader.read(1), 1) == b""
+            assert server.sessions_by_id == {}
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            listener.close()
+            await listener.wait_closed()
+
+    asyncio.run(scenario())
 
 
 def test_control_auth_rejects_a_different_token_before_session_setup() -> None:

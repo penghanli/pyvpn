@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import json
 import uuid
 from pathlib import Path
 
@@ -51,16 +52,57 @@ class WindowsPublicGuard:
         digest = hashlib.sha256(str(data_dir.resolve()).lower().encode("utf-8")).hexdigest()[:16]
         self.prefix = f"pyvpn-public-guard-{digest}-"
 
-    def active(self) -> bool:
+    def status(self) -> str:
         result = run_powershell(
-            "$ErrorActionPreference = 'Stop'; "
-            f"$rules = @(Get-NetFirewallRule -PolicyStore PersistentStore -Name '{self.prefix}*' "
-            "-ErrorAction SilentlyContinue); if ($rules.Count -gt 0) { 'active' }",
+            f"""
+$ErrorActionPreference = 'Stop'
+$profiles = @(Get-NetFirewallProfile -ErrorAction Stop)
+$profilesOk = $profiles.Count -eq 3 -and @($profiles | Where-Object {{
+  $_.Enabled -ne $true -or $_.AllowLocalFirewallRules -eq $false
+}}).Count -eq 0
+$present = @(Get-NetFirewallRule -PolicyStore PersistentStore -Name '{self.prefix}*' `
+  -ErrorAction SilentlyContinue)
+$effective = @(Get-NetFirewallRule -PolicyStore ActiveStore -Name '{self.prefix}*' `
+  -ErrorAction SilentlyContinue | ForEach-Object {{
+    [pscustomobject]@{{name=$_.Name; enabled=($_.Enabled -eq 'True'); block=($_.Action -eq 'Block')}}
+  }})
+[pscustomobject]@{{present=$present.Count; profilesOk=$profilesOk; effective=$effective}} |
+  ConvertTo-Json -Compress -Depth 3
+""",
             timeout=15,
         )
-        return result.stdout.strip() == "active"
+        try:
+            state = json.loads(result.stdout)
+            present = state["present"]
+            profiles_ok = state["profilesOk"]
+            effective = state["effective"] or []
+            if isinstance(effective, dict):
+                effective = [effective]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise PlatformError("could not inspect public guard rules") from exc
+        if not present:
+            return "absent"
+        if not profiles_ok:
+            return "invalid"
+        if not isinstance(effective, list):
+            return "invalid"
+        generations: dict[str, set[str]] = {}
+        for rule in effective:
+            if not isinstance(rule, dict):
+                return "invalid"
+            name = str(rule.get("name", ""))
+            if not name.startswith(self.prefix) or not rule.get("enabled") or not rule.get("block"):
+                continue
+            suffix = name[len(self.prefix) :]
+            generation, separator, family = suffix.partition("-")
+            if separator and family in {"v4", "v6"}:
+                generations.setdefault(generation, set()).add(family)
+        return "active" if {"v4", "v6"} in generations.values() else "invalid"
 
-    def enable(self, server_ips: list[str]) -> None:
+    def active(self) -> bool:
+        return self.status() == "active"
+
+    def enable(self, server_ips: list[str], tunnel_vip: str | None = None) -> None:
         if not server_ips:
             raise PlatformError("no server IPv4 address for the public network guard")
         try:
@@ -69,32 +111,23 @@ class WindowsPublicGuard:
             raise PlatformError("the public network guard requires IPv4 server addresses") from exc
         blocked_v4 = _blocked_networks(4, [*_LOCAL_V4, *permitted])
         blocked_v6 = _blocked_networks(6, list(_LOCAL_V6))
+        local_v4 = ["0.0.0.0/0"]
+        if tunnel_vip:
+            try:
+                local_v4 = _blocked_networks(4, [str(ipaddress.IPv4Address(tunnel_vip)) + "/32"])
+            except ipaddress.AddressValueError as exc:
+                raise PlatformError("the public network guard requires an IPv4 tunnel address") from exc
         generation = uuid.uuid4().hex[:12]
-        names = [
-            f"{self.prefix}{generation}-{family}-{kind}"
-            for family in (4, 6)
-            for kind in ("wired", "wireless")
-        ]
+        names = [f"{self.prefix}{generation}-v4", f"{self.prefix}{generation}-v6"]
         rules = []
-        for family, addresses in ((4, blocked_v4), (6, blocked_v6)):
-            for kind in ("wired", "wireless"):
-                name = f"{self.prefix}{generation}-{family}-{kind}"
-                rules.append(
-                    f"New-NetFirewallRule -Name '{name}' -DisplayName 'pyvpn public guard {kind} IPv{family}' "
-                    f"-Group 'pyvpn public guard' -Direction Outbound -Action Block -Profile Any "
-                    f"-InterfaceType {kind.title()} -RemoteAddress {_ps_array(addresses)} "
-                    "-PolicyStore PersistentStore -ErrorAction Stop | Out-Null"
-                )
-        for protocol in ("TCP", "UDP"):
-            for kind in ("wired", "wireless"):
-                name = f"{self.prefix}{generation}-dns-{protocol.lower()}-{kind}"
-                names.append(name)
-                rules.append(
-                    f"New-NetFirewallRule -Name '{name}' -DisplayName 'pyvpn DNS guard {kind} {protocol}' "
-                    f"-Group 'pyvpn public guard' -Direction Outbound -Action Block -Profile Any "
-                    f"-InterfaceType {kind.title()} -Protocol {protocol} -RemotePort 53 "
-                    "-PolicyStore PersistentStore -ErrorAction Stop | Out-Null"
-                )
+        for family, remote, local in ((4, blocked_v4, local_v4), (6, blocked_v6, ["::/0"])):
+            name = f"{self.prefix}{generation}-v{family}"
+            rules.append(
+                f"New-NetFirewallRule -Name '{name}' -DisplayName 'pyvpn public guard IPv{family}' "
+                f"-Group 'pyvpn public guard' -Direction Outbound -Action Block -Profile Any "
+                f"-LocalAddress {_ps_array(local)} -RemoteAddress {_ps_array(remote)} "
+                "-PolicyStore PersistentStore -ErrorAction Stop | Out-Null"
+            )
         names_ps = _ps_array(names)
         script = f"""
 $ErrorActionPreference = 'Stop'
@@ -106,7 +139,7 @@ try {{
   {chr(10).join(rules)}
   $names = {names_ps}
   $effective = @(Get-NetFirewallRule -PolicyStore ActiveStore -Name '{self.prefix}{generation}-*' -ErrorAction Stop)
-  if ($effective.Count -ne 8 -or @($effective | Where-Object {{
+  if ($effective.Count -ne 2 -or @($effective | Where-Object {{
     $_.Enabled -ne 'True' -or $_.Action -ne 'Block'
   }}).Count -gt 0) {{
     throw 'public guard rules are not active'

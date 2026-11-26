@@ -13,10 +13,15 @@ from pyvpn.client import ClientConfig, VpnClient
 from pyvpn.errors import PlatformError
 from pyvpn.windows_app import (
     WINDOWS_APP_VERSION,
+    WorkerIdentity,
     begin_log_session,
     native_windows_architecture,
+    process_is_running,
+    read_pid,
+    remove_pid_if_current,
     resolve_app_paths,
     tail_text,
+    write_pid,
 )
 
 
@@ -67,6 +72,35 @@ def test_native_windows_architecture_prefers_native_environment_value() -> None:
             "PROCESSOR_ARCHITEW6432": "AMD64",
         }
     ) == "amd64"
+
+
+def test_worker_pid_file_rejects_reused_pid_and_legacy_record(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from pyvpn import windows_app
+
+    pid_path = tmp_path / "worker.pid"
+    monkeypatch.setattr(windows_app, "_process_creation_time", lambda _pid: 100)
+    write_pid(pid_path, 1234)
+    assert read_pid(pid_path) == WorkerIdentity(1234, 100)
+    assert process_is_running(read_pid(pid_path))
+
+    monkeypatch.setattr(windows_app, "_process_creation_time", lambda _pid: 200)
+    assert not process_is_running(read_pid(pid_path))
+    remove_pid_if_current(pid_path, 1234)
+    assert pid_path.exists()
+
+    pid_path.write_text("1234\n", encoding="ascii")
+    assert read_pid(pid_path) is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows process APIs")
+def test_worker_can_read_current_windows_process_creation_time() -> None:
+    from pyvpn import windows_app
+
+    created_at = windows_app._process_creation_time(os.getpid())
+    assert isinstance(created_at, int) and created_at > 0
+    assert process_is_running(WorkerIdentity(os.getpid(), created_at))
 
 
 def test_client_ready_marker_is_created_and_removed(tmp_path: Path) -> None:

@@ -8,6 +8,7 @@ import ipaddress
 import os
 import secrets
 import signal
+import socket
 import ssl
 import sys
 import time
@@ -39,6 +40,7 @@ from .udp import create_udp_endpoint
 DEFAULT_MAX_CLIENTS = 10
 MIN_MAX_CLIENTS = 1
 MAX_MAX_CLIENTS = 10
+CONTROL_HELLO_TIMEOUT = 10.0
 
 
 @dataclass
@@ -137,6 +139,7 @@ class VpnServer:
             host=self.config.listen_host,
             port=self.config.control_port,
             ssl=tls,
+            ssl_handshake_timeout=CONTROL_HELLO_TIMEOUT,
         )
 
         stop_task = asyncio.create_task(self._stop.wait())
@@ -178,7 +181,9 @@ class VpnServer:
         peer = writer.get_extra_info("peername")
         session: ActiveSession | None = None
         try:
-            hello = await read_frame(reader)
+            hello = await asyncio.wait_for(
+                read_frame(reader), timeout=CONTROL_HELLO_TIMEOUT
+            )
             if hello.get("type") != "hello" or hello.get("version") != CONTROL_VERSION:
                 await self._send_error(writer, "invalid hello")
                 return
@@ -234,6 +239,15 @@ class VpnServer:
             self._add_session(session)
 
             endpoint_host = self.config.public_host or self.config.listen_host
+            endpoint = {"host": endpoint_host, "port": self.config.udp_port}
+            try:
+                endpoint_ipv4 = await asyncio.wait_for(
+                    asyncio.to_thread(socket.gethostbyname, endpoint_host), timeout=3
+                )
+                if endpoint_ipv4 != "0.0.0.0":
+                    endpoint["ipv4"] = endpoint_ipv4
+            except (OSError, TimeoutError):
+                pass
             await write_frame(
                 writer,
                 {
@@ -245,7 +259,7 @@ class VpnServer:
                     "routes": ["0.0.0.0/0"],
                     "dns": [self.config.dns],
                     "mtu": self.config.mtu,
-                    "udp_endpoint": {"host": endpoint_host, "port": self.config.udp_port},
+                    "udp_endpoint": endpoint,
                     "crypto": keys.to_json(),
                 },
             )
